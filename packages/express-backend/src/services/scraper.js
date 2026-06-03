@@ -1,0 +1,268 @@
+import axios from "axios";
+import * as cheerio from "cheerio";
+import { Source } from "../models/Source.js";
+import { Article } from "../models/Article.js";
+import { hashContent, isDuplicate } from "./dedup.js";
+import { summarize } from "./summarize.js";
+
+const MAX_ITEMS_PER_SOURCE = Number(process.env.MAX_ITEMS_PER_SOURCE ?? 10);
+const MIN_BODY_CHARS_FOR_SUMMARY = Number(process.env.MIN_BODY_CHARS_FOR_SUMMARY ?? 250);
+const REQUEST_TIMEOUT_MS = Number(process.env.SCRAPER_REQUEST_TIMEOUT_MS ?? 15000);
+
+// Category keywords map
+const CATEGORY_KEYWORDS = {
+  technology: ["tech", "software", "hardware", "ai", "robot", "cyber", "data", "apple", "google", "microsoft", "openai", "startup", "app", "code", "developer", "bitcoin", "crypto"],
+  sports: ["sport", "nba", "nfl", "soccer", "football", "baseball", "tennis", "golf", "olympic", "league", "championship", "match", "game", "player", "team"],
+  politics: ["politic", "government", "election", "senate", "congress", "president", "democrat", "republican", "legislation", "vote", "law", "policy", "white house"],
+  business: ["business", "economy", "stock", "market", "finance", "bank", "invest", "revenue", "profit", "startup", "ipo", "trade", "gdp", "inflation"],
+  science: ["science", "research", "study", "climate", "space", "nasa", "health", "medical", "vaccine", "dna", "physics", "biology", "discovery"],
+  entertainment: ["movie", "film", "music", "celebrity", "oscar", "grammy", "netflix", "spotify", "album", "concert", "theater", "tv", "show", "actor"],
+  world: ["war", "conflict", "ukraine", "israel", "china", "russia", "nato", "un ", "international", "foreign", "diplomat", "treaty"],
+};
+
+function guessCategory(title, body = "") {
+  const text = `${title} ${body}`.toLowerCase();
+  let best = "general";
+  let bestScore = 0;
+  for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    const score = keywords.reduce((n, kw) => n + (text.includes(kw) ? 1 : 0), 0);
+    if (score > bestScore) { bestScore = score; best = cat; }
+  }
+  return best;
+}
+
+function toAbsoluteUrl(baseUrl, maybeUrl) {
+  try { return new URL(maybeUrl, baseUrl).toString(); } catch { return null; }
+}
+
+function cleanText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed;
+}
+
+function extractYouTubeId(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    if (host === "youtu.be") return u.pathname.split("/").filter(Boolean)[0] || null;
+    if (host.endsWith("youtube.com")) {
+      if (u.pathname.startsWith("/embed/")) return u.pathname.split("/")[2] || null;
+      if (u.pathname.startsWith("/shorts/")) return u.pathname.split("/")[2] || null;
+      return u.searchParams.get("v");
+    }
+  } catch {}
+  return null;
+}
+
+function youtubeEmbedUrl(url) {
+  const id = extractYouTubeId(url);
+  return id ? `https://www.youtube.com/embed/${id}` : "";
+}
+
+function isVideoUrl(url) {
+  return /\.(mp4|webm|ogg|mov|m3u8)(\?|$)/i.test(String(url));
+}
+
+function extractImageFromHtml($, baseUrl) {
+  const og = $("meta[property='og:image']").attr("content") ||
+             $("meta[name='twitter:image']").attr("content");
+  if (og) return toAbsoluteUrl(baseUrl, og) || og;
+  const img = $("article img, main img, .article-body img, img").first().attr("src");
+  return img ? (toAbsoluteUrl(baseUrl, img) || img) : "";
+}
+
+function extractVideoFromHtml($, baseUrl) {
+  const canonical = $("link[rel='canonical']").attr("href") || baseUrl;
+  const canonicalEmbed = youtubeEmbedUrl(canonical);
+  if (canonicalEmbed) return { videoUrl: "", videoEmbed: canonicalEmbed };
+
+  const ogV = $("meta[property='og:video']").attr("content") ||
+              $("meta[property='og:video:url']").attr("content") ||
+              $("meta[property='og:video:secure_url']").attr("content");
+  if (ogV) {
+    const abs = toAbsoluteUrl(baseUrl, ogV) || ogV;
+    const embed = youtubeEmbedUrl(abs);
+    return embed ? { videoUrl: "", videoEmbed: embed } : { videoUrl: abs, videoEmbed: "" };
+  }
+
+  const iframe = $("iframe[src]").filter((_i, el) => /youtube|youtu\.be|vimeo/i.test($(el).attr("src") || "")).first().attr("src");
+  if (iframe) {
+    const abs = toAbsoluteUrl(baseUrl, iframe) || iframe;
+    const embed = youtubeEmbedUrl(abs);
+    return { videoUrl: "", videoEmbed: embed || abs };
+  }
+
+  const vid = $("video[src], video source[src]").first().attr("src");
+  if (vid) {
+    const abs = toAbsoluteUrl(baseUrl, vid);
+    return abs ? { videoUrl: abs, videoEmbed: "" } : { videoUrl: "", videoEmbed: "" };
+  }
+  return { videoUrl: "", videoEmbed: "" };
+}
+
+function parseRss(url, body) {
+  const $ = cheerio.load(body, { xmlMode: true });
+  const items = [];
+  const nodes = $("item").length > 0 ? $("item") : $("entry");
+  nodes.each((_idx, el) => {
+    const title = cleanText($(el).find("title").first().text());
+    const linkTag = $(el).find("link").first();
+    const linkRaw = cleanText(linkTag.attr("href") || linkTag.text());
+    const description = cleanText($(el).find("description").first().text());
+    const summaryText = cleanText($(el).find("summary").first().text());
+    const contentEncoded = cleanText($(el).find("content\\:encoded").first().text());
+    const contentText = cleanText($(el).find("content").first().text());
+    const pubDateRaw =
+      cleanText($(el).find("pubDate").first().text()) ||
+      cleanText($(el).find("updated").first().text()) ||
+      cleanText($(el).find("published").first().text());
+    const imageRaw =
+      $(el).find("media\\:thumbnail").attr("url") ||
+      $(el).find("enclosure[type^='image']").attr("url") ||
+      $(el).find("media\\:content[medium='image']").attr("url") || "";
+    const videoRaw =
+      $(el).find("enclosure[type^='video']").attr("url") ||
+      $(el).find("media\\:content[medium='video']").attr("url") ||
+      $(el).find("media\\:player").attr("url") || "";
+    const link = toAbsoluteUrl(url, linkRaw);
+    if (!title || !link) return;
+    const videoAbs = videoRaw ? (toAbsoluteUrl(url, videoRaw) || videoRaw) : "";
+    items.push({
+      title,
+      url: link,
+      body: contentEncoded || contentText || summaryText || description || title,
+      publishedAt: parseDate(pubDateRaw),
+      imageUrl: imageRaw ? (toAbsoluteUrl(url, imageRaw) || imageRaw) : "",
+      videoUrl: videoAbs && isVideoUrl(videoAbs) ? videoAbs : "",
+      videoEmbed: youtubeEmbedUrl(videoAbs || link),
+    });
+  });
+  return items;
+}
+
+function parseHtml(url, body) {
+  const $ = cheerio.load(body);
+  const seen = new Set();
+  const items = [];
+  $("a[href]").each((_idx, el) => {
+    if (items.length >= MAX_ITEMS_PER_SOURCE) return;
+    const href = $(el).attr("href");
+    const title = cleanText($(el).text());
+    const link = toAbsoluteUrl(url, href);
+    if (!title || title.length < 15 || !link) return;
+    if (!/^https?:\/\//i.test(link)) return;
+    if (seen.has(link)) return;
+    seen.add(link);
+    items.push({ title, url: link, body: title, publishedAt: null, imageUrl: "", videoUrl: "", videoEmbed: youtubeEmbedUrl(link) });
+  });
+  return items;
+}
+
+async function fetchPage(url) {
+  const response = await axios.get(url, {
+    timeout: REQUEST_TIMEOUT_MS,
+    maxRedirects: 5,
+    headers: {
+      "User-Agent": "TLDRBot/1.0 (+https://tldr.news)",
+      Accept: "application/rss+xml, application/xml, text/xml, text/html;q=0.9, */*;q=0.8",
+    },
+  });
+  return String(response.data ?? "");
+}
+
+function extractArticleBodyFromHtml(html, baseUrl) {
+  const $ = cheerio.load(html);
+  const selectors = ["article", "main article", '[role="main"] article', ".article-body", ".entry-content", ".post-content"];
+  let text = "";
+  for (const selector of selectors) {
+    text = cleanText(
+      $(selector).find("p").map((_idx, p) => $(p).text()).get().join(" "),
+    );
+    if (text.length >= 300) break;
+  }
+  if (!text) {
+    text = cleanText($("p").map((_idx, p) => $(p).text()).get().join(" ")).slice(0, 16000);
+  }
+  const imageUrl = extractImageFromHtml($, baseUrl);
+  const { videoUrl, videoEmbed } = extractVideoFromHtml($, baseUrl);
+  return { text, imageUrl, videoUrl, videoEmbed };
+}
+
+async function enrichCandidate(candidate) {
+  if ((candidate.body ?? "").length >= 500) {
+    return { text: candidate.body, imageUrl: candidate.imageUrl || "", videoUrl: candidate.videoUrl || "", videoEmbed: candidate.videoEmbed || youtubeEmbedUrl(candidate.url) };
+  }
+  try {
+    const articleHtml = await fetchPage(candidate.url);
+    return extractArticleBodyFromHtml(articleHtml, candidate.url);
+  } catch {
+    return { text: candidate.body, imageUrl: candidate.imageUrl || "", videoUrl: candidate.videoUrl || "", videoEmbed: candidate.videoEmbed || youtubeEmbedUrl(candidate.url) };
+  }
+}
+
+async function scrapeSource(source) {
+  const body = await fetchPage(source.url);
+  const looksLikeRss = /<rss|<feed|<rdf:RDF/i.test(body);
+  const rawItems = looksLikeRss ? parseRss(source.url, body) : parseHtml(source.url, body);
+  return rawItems.slice(0, MAX_ITEMS_PER_SOURCE);
+}
+
+/**
+ * Scrapes all active sources and persists new deduplicated articles.
+ */
+export async function scrapeAllSources() {
+  const sources = await Source.find({ active: true }).lean();
+  let discovered = 0, saved = 0, duplicates = 0, failedSources = 0;
+
+  for (const source of sources) {
+    try {
+      const candidates = await scrapeSource(source);
+      discovered += candidates.length;
+
+      for (const candidate of candidates) {
+        const enriched = await enrichCandidate(candidate);
+        const digest = hashContent(`${candidate.title}\n${enriched.text}`);
+        const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id").lean();
+        if (existingByUrl || (await isDuplicate(digest))) { duplicates++; continue; }
+
+        let summary = "";
+        try {
+          const summaryInput = enriched.text && enriched.text.length >= MIN_BODY_CHARS_FOR_SUMMARY
+            ? enriched.text
+            : `${candidate.title}. ${enriched.text || candidate.title}`;
+          summary = await summarize(summaryInput);
+        } catch (err) {
+          console.warn(`[scraper] summarize failed for ${candidate.url}:`, err.message);
+        }
+
+        const category = guessCategory(candidate.title, enriched.text);
+
+        await Article.create({
+          sourceId: source._id,
+          title: candidate.title,
+          url: candidate.url,
+          contentHash: digest,
+          summary,
+          imageUrl: enriched.imageUrl || "",
+          videoUrl: enriched.videoUrl || "",
+          videoEmbed: enriched.videoEmbed || "",
+          category,
+          publishedAt: candidate.publishedAt instanceof Date && !Number.isNaN(candidate.publishedAt.valueOf())
+            ? candidate.publishedAt : null,
+          scrapedAt: new Date(),
+        });
+        saved++;
+      }
+      await Source.findByIdAndUpdate(source._id, { lastScrapedAt: new Date() });
+    } catch (err) {
+      failedSources++;
+      console.error(`[scraper] failed source ${source.url}`, err.message);
+    }
+  }
+  return { sources: sources.length, discovered, saved, duplicates, failedSources };
+}

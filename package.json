@@ -1,0 +1,30 @@
+{
+  "name": "csc307-teamproject",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/advelasquez02/CSC307-TEAMPROJECT#readme",
+  "bugs": {
+    "url": "https://github.com/advelasquez02/CSC307-TEAMPROJECT/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/advelasquez02/CSC307-TEAMPROJECT.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "format": "prettier --write './**/*.{js,jsx,ts,tsx,css,md,json}' --config ./.prettierrc"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "prettier": "^3.8.3"
+  }
+}

@@ -1,0 +1,148 @@
+import { Router } from "express";
+import mongoose from "mongoose";
+import { Source } from "../models/Source.js";
+
+export const sourcesRouter = Router();
+
+/**
+ * Parses positive integer query param with default.
+ * @param {string|undefined} value - Raw query value.
+ * @param {number} fallback - Default when missing or invalid.
+ * @returns {number}
+ */
+function parsePositiveInt(value, fallback) {
+  const n = parseInt(String(value), 10);
+  if (Number.isNaN(n) || n < 1) return fallback;
+  return n;
+}
+
+sourcesRouter.get("/", async (req, res) => {
+  try {
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = Math.min(parsePositiveInt(req.query.limit, 8), 100);
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await Promise.all([
+      Source.find().sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Source.countDocuments(),
+    ]);
+
+    const pages = Math.max(1, Math.ceil(total / limit));
+
+    res.json({
+      items,
+      total,
+      page,
+      pages,
+      limit,
+    });
+  } catch (err) {
+    console.error("GET /api/sources", err);
+    res.status(500).json({ error: "Failed to list sources" });
+  }
+});
+
+sourcesRouter.get("/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const doc = await Source.findById(req.params.id).lean();
+    if (!doc) return res.status(404).json({ error: "Source not found" });
+    res.json(doc);
+  } catch (err) {
+    console.error("GET /api/sources/:id", err);
+    res.status(500).json({ error: "Failed to get source" });
+  }
+});
+
+sourcesRouter.post("/", async (req, res) => {
+  try {
+    const { name, url, active } = req.body ?? {};
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "name is required" });
+    }
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({ error: "url is required" });
+    }
+
+    const doc = await Source.create({
+      name: name.trim(),
+      url: url.trim(),
+      active: typeof active === "boolean" ? active : true,
+    });
+    res.status(201).json(doc.toObject());
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ error: "A source with this URL already exists" });
+    }
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error("POST /api/sources", err);
+    res.status(500).json({ error: "Failed to create source" });
+  }
+});
+
+sourcesRouter.patch("/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const { name, url, active } = req.body ?? {};
+    const updates = {};
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "name must be a non-empty string" });
+      }
+      updates.name = name.trim();
+    }
+    if (url !== undefined) {
+      if (typeof url !== "string" || !url.trim()) {
+        return res.status(400).json({ error: "url must be a non-empty string" });
+      }
+      updates.url = url.trim();
+    }
+    if (active !== undefined) {
+      if (typeof active !== "boolean") {
+        return res.status(400).json({ error: "active must be a boolean" });
+      }
+      updates.active = active;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    const doc = await Source.findByIdAndUpdate(req.params.id, updates, {
+      new: true,
+      runValidators: true,
+    }).lean();
+
+    if (!doc) return res.status(404).json({ error: "Source not found" });
+    res.json(doc);
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ error: "A source with this URL already exists" });
+    }
+    if (err.name === "ValidationError") {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error("PATCH /api/sources/:id", err);
+    res.status(500).json({ error: "Failed to update source" });
+  }
+});
+
+sourcesRouter.delete("/:id", async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const doc = await Source.findByIdAndDelete(req.params.id).lean();
+    if (!doc) return res.status(404).json({ error: "Source not found" });
+    res.status(204).send();
+  } catch (err) {
+    console.error("DELETE /api/sources/:id", err);
+    res.status(500).json({ error: "Failed to delete source" });
+  }
+});

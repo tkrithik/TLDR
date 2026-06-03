@@ -1,0 +1,11 @@
+Product Vision: For avid online news readers who struggle to consolidate their news sources due to variety of topic, time, and density, TLDR (Too Long Didn't Read) is a AI news consolidator and summarizer 
+which reduces the amount of reading time per news topic while preserving all information cross checked by a variety of sources across the internet. Unlike particle.news, our product also cites 
+information that is not cross checked with a potential misinformation flag, and also incorporates a tailored recommendation feed and minimalist UI.
+
+
+User Stories:
+1. As a quick news reader, I want to ensure no duplicate articles appear on my feed so that readers on a time crunch don't waste their time reading the same article multiple times.
+
+2. As a daily user, I want auto scrapes to be daily on its own, without a user trigger so that I do not have to waste time manually triggering a scrape every time I want to read the news.
+
+3. As a news reader I want reputable, reliable articles auto scraped and cited onto my feed so that I do not fall for the vast amount of misinformation on my feed, and stick to my preferred news articles prior to switching over to TLDR.
