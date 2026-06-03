@@ -10,15 +10,25 @@ import { authRouter } from "./routes/auth.js";
  * @returns {string[]}
  */
 function getAllowedOrigins() {
-  const fromEnv = process.env.CORS_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean);
-  if (fromEnv?.length) return fromEnv;
   const defaults = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     process.env.FRONTEND_URL,
-    "https://react-frontend-five-phi.vercel.app",
-  ].filter(Boolean);
-  return [...new Set(defaults)];
+  ];
+
+  const fromEnv = process.env.CORS_ORIGINS?.split(",");
+  return [...new Set([...(fromEnv || []), ...defaults].map((o) => o?.trim()).filter(Boolean))];
+}
+
+/**
+ * @param {string | undefined} origin
+ * @param {string[]} allowedOrigins
+ * @returns {boolean}
+ */
+function isAllowedOrigin(origin, allowedOrigins) {
+  if (!origin) return true;
+  if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) return true;
+  return /^https:\/\/tldr-react-frontend.*\.vercel\.app$/.test(origin);
 }
 
 /**
@@ -28,18 +38,21 @@ export function createApp() {
   const app = express();
   const allowedOrigins = getAllowedOrigins();
 
-  app.use(
-    cors({
-      origin(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-          callback(null, true);
-          return;
-        }
-        callback(null, false);
-      },
-      credentials: true,
-    }),
-  );
+  const corsOptions = {
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin, allowedOrigins)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error(`CORS blocked origin: ${origin}`));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  };
+
+  app.use(cors(corsOptions));
+  app.options("*", cors(corsOptions));
   app.use(express.json());
 
   app.get("/", (_req, res) => {
