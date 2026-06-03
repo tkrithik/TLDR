@@ -20,14 +20,20 @@ function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function storyTokens(title) {
-  return String(title || "")
+function storyTokens(...parts) {
+  return parts
+    .map((part) => String(part || ""))
+    .join(" ")
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
     .map((token) => token.trim())
     .filter((token) => token.length >= 4 && !STOP_WORDS.has(token))
-    .slice(0, 12);
+    .slice(0, 30);
+}
+
+function articleTokens(article) {
+  return storyTokens(article.title, article.summary);
 }
 
 function jaccard(aTokens, bTokens) {
@@ -41,21 +47,32 @@ function jaccard(aTokens, bTokens) {
   return intersection / new Set([...a, ...b]).size;
 }
 
+function sourceKey(article) {
+  return article.sourceId?._id?.toString?.() || article.sourceId?.toString?.() || article.url;
+}
+
+function samePublishedDay(a, b) {
+  const da = new Date(a.publishedAt || a.scrapedAt || a.createdAt);
+  const db = new Date(b.publishedAt || b.scrapedAt || b.createdAt);
+  if (Number.isNaN(da.valueOf()) || Number.isNaN(db.valueOf())) return true;
+  return Math.abs(da.getTime() - db.getTime()) <= (Number(process.env.STORY_GROUP_WINDOW_HOURS ?? 168) * 60 * 60 * 1000);
+}
+
 function areSameStory(article, group) {
-  const maxAgeMs = Number(process.env.STORY_GROUP_WINDOW_HOURS ?? 72) * 60 * 60 * 1000;
-  const articleTime = new Date(article.publishedAt || article.scrapedAt || article.createdAt).getTime();
-  const groupTime = new Date(group.primary.publishedAt || group.primary.scrapedAt || group.primary.createdAt).getTime();
-  if (Number.isFinite(articleTime) && Number.isFinite(groupTime) && Math.abs(articleTime - groupTime) > maxAgeMs) {
-    return false;
-  }
-  if (article.category && group.primary.category && article.category !== group.primary.category) {
-    return false;
-  }
-  const score = jaccard(storyTokens(article.title), group.tokens);
-  if (score >= 0.34) return true;
-  const articleTokenSet = new Set(storyTokens(article.title));
-  const shared = group.tokens.filter((token) => articleTokenSet.has(token));
-  return shared.length >= 3;
+  if (!samePublishedDay(article, group.primary)) return false;
+
+  const tokens = articleTokens(article);
+  const score = jaccard(tokens, group.tokens);
+  const tokenSet = new Set(tokens);
+  const shared = group.tokens.filter((token) => tokenSet.has(token));
+
+  // Be intentionally more aggressive than exact-title dedupe: different outlets often
+  // describe the same event with different headlines. Two shared meaningful words or
+  // a modest Jaccard score is enough to create a multi-source story cluster.
+  if (score >= 0.18) return true;
+  if (shared.length >= 2) return true;
+
+  return false;
 }
 
 function makeStoryId(articles) {
@@ -82,12 +99,14 @@ function combinedSummary(articles) {
 
   if (pieces.length <= 1) return pieces[0]?.text || "";
 
-  const lead = `This combined story draws from ${pieces.length} sources: ${pieces.map((item) => item.name).join(", ")}.`;
+  const uniqueNames = [...new Set(pieces.map((item) => item.name))];
+  const lead = `This is a combined story using coverage from ${uniqueNames.join(", ")}.`;
   const body = pieces
-    .slice(0, 5)
-    .map((item) => `${item.name}: ${item.text}`)
+    .slice(0, 8)
+    .map((item) => `${item.name} reports: ${item.text}`)
     .join(" ");
-  return `${lead} ${body}`;
+  const conclusion = `Together, the sources give a fuller view of the same developing story instead of showing separate one-source summaries.`;
+  return `${lead} ${body} ${conclusion}`;
 }
 
 function toStory(group) {
@@ -126,12 +145,21 @@ function groupArticles(articles) {
     const match = groups.find((group) => areSameStory(article, group));
     if (match) {
       match.articles.push(article);
-      match.tokens = [...new Set([...match.tokens, ...storyTokens(article.title)])];
+      match.tokens = [...new Set([...match.tokens, ...articleTokens(article)])];
     } else {
-      groups.push({ primary: article, tokens: storyTokens(article.title), articles: [article] });
+      groups.push({ primary: article, tokens: articleTokens(article), articles: [article] });
     }
   }
-  return groups.map(toStory);
+
+  // Only call it a combined story when it actually contains multiple source names.
+  // Single-source clusters stay as normal article cards.
+  return groups.map((group) => {
+    const uniqueSources = new Set(group.articles.map(sourceKey));
+    if (uniqueSources.size < 2) {
+      return group.articles.map((article) => toStory({ articles: [article] }));
+    }
+    return [toStory(group)];
+  }).flat();
 }
 
 // GET /api/articles — paginated combined story list with optional filters

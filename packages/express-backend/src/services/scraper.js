@@ -88,20 +88,54 @@ function extractImageFromHtml($, baseUrl) {
 }
 
 function extractVideoFromHtml($, baseUrl) {
+  const pageText = $.html() || "";
+
   const canonical = $("link[rel='canonical']").attr("href") || baseUrl;
   const canonicalEmbed = youtubeEmbedUrl(canonical);
   if (canonicalEmbed) return { videoUrl: "", videoEmbed: canonicalEmbed };
 
+  // JSON-LD often contains VideoObject content even when no simple <video> tag exists.
+  let jsonLdVideo = "";
+  $("script[type='application/ld+json']").each((_i, el) => {
+    if (jsonLdVideo) return;
+    const raw = $(el).contents().text();
+    try {
+      const parsed = JSON.parse(raw);
+      const stack = Array.isArray(parsed) ? [...parsed] : [parsed];
+      while (stack.length) {
+        const item = stack.shift();
+        if (!item || typeof item !== "object") continue;
+        const type = Array.isArray(item["@type"]) ? item["@type"].join(" ") : String(item["@type"] || "");
+        if (/VideoObject/i.test(type)) {
+          jsonLdVideo = item.embedUrl || item.contentUrl || item.url || "";
+          break;
+        }
+        for (const value of Object.values(item)) {
+          if (Array.isArray(value)) stack.push(...value);
+          else if (value && typeof value === "object") stack.push(value);
+        }
+      }
+    } catch {
+      // Ignore malformed JSON-LD blocks.
+    }
+  });
+  if (jsonLdVideo) {
+    const abs = toAbsoluteUrl(baseUrl, jsonLdVideo) || jsonLdVideo;
+    const embed = youtubeEmbedUrl(abs);
+    return embed ? { videoUrl: "", videoEmbed: embed } : { videoUrl: abs, videoEmbed: "" };
+  }
+
   const ogV = $("meta[property='og:video']").attr("content") ||
               $("meta[property='og:video:url']").attr("content") ||
-              $("meta[property='og:video:secure_url']").attr("content");
+              $("meta[property='og:video:secure_url']").attr("content") ||
+              $("meta[name='twitter:player']").attr("content");
   if (ogV) {
     const abs = toAbsoluteUrl(baseUrl, ogV) || ogV;
     const embed = youtubeEmbedUrl(abs);
     return embed ? { videoUrl: "", videoEmbed: embed } : { videoUrl: abs, videoEmbed: "" };
   }
 
-  const iframe = $("iframe[src]").filter((_i, el) => /youtube|youtu\.be|vimeo/i.test($(el).attr("src") || "")).first().attr("src");
+  const iframe = $("iframe[src], embed[src]").filter((_i, el) => /youtube|youtu\.be|vimeo|video|player/i.test($(el).attr("src") || "")).first().attr("src");
   if (iframe) {
     const abs = toAbsoluteUrl(baseUrl, iframe) || iframe;
     const embed = youtubeEmbedUrl(abs);
@@ -113,6 +147,11 @@ function extractVideoFromHtml($, baseUrl) {
     const abs = toAbsoluteUrl(baseUrl, vid);
     return abs ? { videoUrl: abs, videoEmbed: "" } : { videoUrl: "", videoEmbed: "" };
   }
+
+  const yt = findYouTubeUrl(pageText);
+  const ytEmbed = youtubeEmbedUrl(yt);
+  if (ytEmbed) return { videoUrl: "", videoEmbed: ytEmbed };
+
   return { videoUrl: "", videoEmbed: "" };
 }
 
