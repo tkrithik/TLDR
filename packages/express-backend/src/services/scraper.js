@@ -39,6 +39,17 @@ function cleanText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+
+function findFirstUrl(text) {
+  const match = String(text || "").match(/https?:\/\/[^\s"'<>]+/i);
+  return match ? match[0] : "";
+}
+
+function findYouTubeUrl(text) {
+  const match = String(text || "").match(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s"'<>]+/i);
+  return match ? match[0] : "";
+}
+
 function parseDate(value) {
   if (!value) return null;
   const parsed = new Date(value);
@@ -128,7 +139,10 @@ function parseRss(url, body) {
     const videoRaw =
       $(el).find("enclosure[type^='video']").attr("url") ||
       $(el).find("media\\:content[medium='video']").attr("url") ||
-      $(el).find("media\\:player").attr("url") || "";
+      $(el).find("media\\:content[type^='video']").attr("url") ||
+      $(el).find("media\\:player").attr("url") ||
+      findYouTubeUrl(`${description} ${summaryText} ${contentEncoded}`) ||
+      findFirstUrl($(el).find("link[rel='enclosure']").attr("href") || "") || "";
     const link = toAbsoluteUrl(url, linkRaw);
     if (!title || !link) return;
     const videoAbs = videoRaw ? (toAbsoluteUrl(url, videoRaw) || videoRaw) : "";
@@ -139,7 +153,7 @@ function parseRss(url, body) {
       publishedAt: parseDate(pubDateRaw),
       imageUrl: imageRaw ? (toAbsoluteUrl(url, imageRaw) || imageRaw) : "",
       videoUrl: videoAbs && isVideoUrl(videoAbs) ? videoAbs : "",
-      videoEmbed: youtubeEmbedUrl(videoAbs || link),
+      videoEmbed: youtubeEmbedUrl(videoAbs || link || description || contentEncoded),
     });
   });
   return items;
@@ -219,8 +233,19 @@ async function saveCandidatesForSource(source, candidates) {
   for (const candidate of candidates) {
     const enriched = await enrichCandidate(candidate);
     const digest = hashContent(`${candidate.title}\n${enriched.text}`);
-    const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id").lean();
-    if (existingByUrl || (await isDuplicate(digest))) { duplicates++; continue; }
+    const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id videoUrl videoEmbed imageUrl").lean();
+    if (existingByUrl) {
+      const updates = {};
+      if (!existingByUrl.videoUrl && enriched.videoUrl) updates.videoUrl = enriched.videoUrl;
+      if (!existingByUrl.videoEmbed && enriched.videoEmbed) updates.videoEmbed = enriched.videoEmbed;
+      if (!existingByUrl.imageUrl && enriched.imageUrl) updates.imageUrl = enriched.imageUrl;
+      if (Object.keys(updates).length > 0) {
+        await Article.findByIdAndUpdate(existingByUrl._id, updates);
+      }
+      duplicates++;
+      continue;
+    }
+    if (await isDuplicate(digest)) { duplicates++; continue; }
 
     let summary = "";
     try {

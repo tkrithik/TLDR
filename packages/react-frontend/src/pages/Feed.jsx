@@ -26,7 +26,7 @@ function timeAgo(dateStr) {
 
 function ArticleCard({ article }) {
   const hasVideo = Boolean(article.videoUrl || article.videoEmbed)
-  const source = article.sourceId?.name || ''
+  const source = article.isCombinedStory ? `${article.sourceCount || article.relatedSources?.length || 2} sources` : (article.sourceId?.name || '')
   return (
     <Link to={`/articles/${article._id}`} className="feed-card">
       {article.imageUrl && (
@@ -50,6 +50,7 @@ function ArticleCard({ article }) {
         </div>
         <h2 className="feed-card-title">{article.title}</h2>
         {article.summary && <p className="feed-card-summary">{article.summary}</p>}
+        {article.isCombinedStory && <p className="feed-card-combined">Combined coverage from multiple sources</p>}
       </div>
     </Link>
   )

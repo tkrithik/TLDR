@@ -1622,3 +1622,23 @@ table.data tr:last-child td {
   flex-wrap: wrap;
 }
 .pagination-info { font-size: 0.875rem; color: var(--text-muted); }
+
+.feed-card-combined {
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.article-source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.article-source-chip {
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px;
+  padding: 0.45rem 0.75rem;
+  text-decoration: none;
+}

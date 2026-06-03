@@ -99,6 +99,7 @@ export default function ArticlePage() {
   }, [id])
 
   async function toggleBookmark() {
+    if (article?.isCombinedStory) return
     if (!user) { navigate('/login'); return }
     setBookmarking(true)
     try {
@@ -132,6 +133,7 @@ export default function ArticlePage() {
 
   const source = article.sourceId
   const hasVideo = Boolean(article.videoUrl || article.videoEmbed)
+  const relatedSources = Array.isArray(article.relatedSources) ? article.relatedSources : []
 
   return (
     <article className="article-page">
@@ -152,10 +154,11 @@ export default function ArticlePage() {
       <header className="article-header">
         <div className="article-meta-row">
           {source && (
-            <a href={source.url} target="_blank" rel="noopener noreferrer" className="article-source-link">
+            <a href={source.url || article.url} target="_blank" rel="noopener noreferrer" className="article-source-link">
               {source.name}
             </a>
           )}
+          {article.isCombinedStory && <span className="tldr-badge">Combined story</span>}
           <span className="muted">
             {timeAgo(article.publishedAt || article.scrapedAt)}
           </span>
@@ -181,9 +184,9 @@ export default function ArticlePage() {
             type="button"
             className={`btn btn-ghost bookmark-btn${bookmarked ? ' bookmarked' : ''}`}
             onClick={toggleBookmark}
-            disabled={bookmarking}
+            disabled={bookmarking || article.isCombinedStory}
           >
-            {bookmarked ? '★ Saved' : '☆ Save'}
+            {article.isCombinedStory ? 'Combined' : bookmarked ? '★ Saved' : '☆ Save'}
           </button>
         </div>
       </header>
@@ -220,6 +223,27 @@ export default function ArticlePage() {
           Read full article at {source?.name || 'source'} ↗
         </a>
       </div>
+
+      {relatedSources.length > 1 && (
+        <section className="article-tldr-block" aria-label="Sources used">
+          <div className="article-tldr-label">
+            <span className="tldr-badge">Sources used</span>
+          </div>
+          <div className="article-source-list">
+            {relatedSources.map((item) => (
+              <a
+                key={`${item.name}-${item.articleUrl}`}
+                href={item.articleUrl || item.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="article-source-chip"
+              >
+                {item.name} ↗
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
 
       <footer className="article-footer">
         <Link to="/feed" className="btn btn-ghost">← Back to feed</Link>
