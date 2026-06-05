@@ -31,9 +31,29 @@ function makeBlurb(text, max = 180) {
   return `${cut || value.slice(0, max)}…`
 }
 
+function hostFromUrl(value) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
+function sourceLabel(article) {
+  const related = Array.isArray(article.relatedSources) ? article.relatedSources.filter((source) => source?.name) : []
+  if (related.length > 0) {
+    const names = [...new Set(related.map((source) => source.name).filter(Boolean))]
+    if (names.length <= 3) return names.join(' • ')
+    return `${names.slice(0, 3).join(' • ')} +${names.length - 3}`
+  }
+  if (article.sourceId?.name) return article.sourceId.name
+  const host = hostFromUrl(article.url || article.sourceId?.url)
+  return host || ''
+}
+
 function ArticleCard({ article }) {
   const hasVideo = Boolean(article.videoUrl || article.videoEmbed)
-  const source = article.isCombinedStory ? `${article.sourceCount || article.relatedSources?.length || 2} sources` : (article.sourceId?.name || '')
+  const source = sourceLabel(article)
   return (
     <Link to={`/articles/${article._id}`} className="feed-card">
       {article.imageUrl && (

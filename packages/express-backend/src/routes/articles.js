@@ -84,12 +84,69 @@ function splitStoryId(id) {
   return String(id).slice(6).split("_").filter((part) => mongoose.isValidObjectId(part));
 }
 
+function hostFromUrl(value) {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return host || "";
+  } catch {
+    return "";
+  }
+}
+
+function prettifyHost(host) {
+  const clean = String(host || "").replace(/^www\./, "");
+  const known = {
+    "cnn.com": "CNN",
+    "nytimes.com": "New York Times",
+    "washingtonpost.com": "Washington Post",
+    "reuters.com": "Reuters",
+    "apnews.com": "AP News",
+    "nbcnews.com": "NBC News",
+    "cbsnews.com": "CBS News",
+    "abcnews.go.com": "ABC News",
+    "foxnews.com": "Fox News",
+    "bbc.com": "BBC",
+    "bbc.co.uk": "BBC",
+    "theguardian.com": "The Guardian",
+    "npr.org": "NPR",
+    "politico.com": "Politico",
+    "axios.com": "Axios",
+    "thehill.com": "The Hill",
+  };
+  if (known[clean]) return known[clean];
+  const parts = clean.split(".").filter(Boolean);
+  const base = parts.length >= 2 ? parts[parts.length - 2] : clean;
+  return base
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ") || "Source";
+}
+
 function sourceName(article) {
-  return article.sourceId?.name || "Source";
+  const populatedName = typeof article.sourceId === "object" ? article.sourceId?.name : "";
+  const rawName = article.sourceName || populatedName || "";
+  const badNames = /^(source|sources?|no sources?|unknown|untitled)$/i;
+  if (rawName && !badNames.test(String(rawName).trim())) return String(rawName).trim();
+  return prettifyHost(hostFromUrl(article.url || article.sourceId?.url));
 }
 
 function sourceUrl(article) {
-  return article.sourceId?.url || article.url;
+  return (typeof article.sourceId === "object" && article.sourceId?.url) || article.sourceUrl || article.url;
+}
+
+function uniqueSourceList(articles) {
+  const seen = new Set();
+  const sources = [];
+  for (const article of articles) {
+    const name = sourceName(article);
+    const url = sourceUrl(article);
+    const key = `${name.toLowerCase()}|${hostFromUrl(url)}`;
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    sources.push({ name, url, articleUrl: article.url });
+  }
+  return sources;
 }
 
 const BAD_TITLE_PATTERNS = [
@@ -226,11 +283,7 @@ function makeBlurb(value, maxLength = 260) {
 function toStory(group) {
   const articles = group.articles;
   const primary = articles[0];
-  const allSources = articles.map((article) => ({
-    name: sourceName(article),
-    url: sourceUrl(article),
-    articleUrl: article.url,
-  }));
+  const allSources = uniqueSourceList(articles);
   const withVideo = articles.find((article) => article.videoEmbed || article.videoUrl);
   const withImage = articles.find((article) => article.imageUrl);
 
@@ -238,7 +291,7 @@ function toStory(group) {
     ...primary,
     _id: makeStoryId(articles),
     isCombinedStory: articles.length > 1,
-    sourceCount: new Set(allSources.map((source) => source.name)).size,
+    sourceCount: allSources.length || 1,
     relatedArticleIds: articles.map((article) => article._id.toString()),
     relatedSources: allSources,
     title: primary.title,
@@ -249,8 +302,8 @@ function toStory(group) {
     videoUrl: withVideo?.videoUrl || primary.videoUrl || "",
     videoEmbed: withVideo?.videoEmbed || primary.videoEmbed || "",
     sourceId: articles.length > 1
-      ? { name: `${new Set(allSources.map((source) => source.name)).size} sources`, url: primary.sourceId?.url || "" }
-      : primary.sourceId,
+      ? { name: allSources.map((source) => source.name).slice(0, 3).join(" • "), url: sourceUrl(primary) || "" }
+      : { name: sourceName(primary), url: sourceUrl(primary) },
   };
 }
 

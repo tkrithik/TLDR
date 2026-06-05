@@ -33,6 +33,45 @@ function normalizeEmbedUrl(value) {
   return id ? `https://www.youtube.com/embed/${id}` : withProtocol
 }
 
+function hostFromUrl(value) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
+function normalizeSources(article) {
+  const related = Array.isArray(article.relatedSources) ? article.relatedSources : []
+  const base = []
+  for (const item of related) {
+    if (item?.name || item?.url || item?.articleUrl) {
+      base.push({
+        name: item.name || hostFromUrl(item.articleUrl || item.url),
+        url: item.url || item.articleUrl || '',
+        articleUrl: item.articleUrl || item.url || '',
+      })
+    }
+  }
+  if (article?.sourceId?.name || article?.url) {
+    base.push({
+      name: article.sourceId?.name || hostFromUrl(article.url),
+      url: article.sourceId?.url || article.url || '',
+      articleUrl: article.url || article.sourceId?.url || '',
+    })
+  }
+  const seen = new Set()
+  return base.filter((item) => {
+    const name = String(item.name || '').trim()
+    if (!name) return false
+    const key = `${name.toLowerCase()}|${hostFromUrl(item.articleUrl || item.url)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    item.name = name
+    return true
+  })
+}
+
 function articleParagraphs(text) {
   const value = String(text || '').trim()
   if (!value) return []
@@ -144,9 +183,9 @@ export default function ArticlePage() {
     </div>
   )
 
-  const source = article.sourceId
+  const relatedSources = normalizeSources(article)
+  const source = relatedSources[0] || article.sourceId
   const hasVideo = Boolean(article.videoUrl || article.videoEmbed)
-  const relatedSources = Array.isArray(article.relatedSources) ? article.relatedSources : []
 
   return (
     <article className="article-page">
@@ -237,11 +276,11 @@ export default function ArticlePage() {
           rel="noopener noreferrer"
           className="btn btn-primary"
         >
-          Read full article at {source?.name || 'source'} ↗
+          Read original coverage{source?.name ? ` at ${source.name}` : ''} ↗
         </a>
       </div>
 
-      {relatedSources.length > 1 && (
+      {relatedSources.length > 0 && (
         <section className="article-tldr-block" aria-label="Sources used">
           <div className="article-tldr-label">
             <span className="tldr-badge">Sources used</span>
