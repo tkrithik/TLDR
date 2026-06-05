@@ -196,17 +196,15 @@ export default function Feed() {
             />
             <button type="submit" className="btn btn-ghost">Search</button>
           </form>
-          {user && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={handleScrape}
-              disabled={scraping}
-              title="Scrape all active sources now"
-            >
-              {scraping ? 'Scraping…' : '⟳ Refresh'}
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleScrape}
+            disabled={scraping}
+            title="Scrape all active sources now"
+          >
+            {scraping ? 'Scraping…' : '⟳ Refresh'}
+          </button>
         </div>
       </div>
 
@@ -253,12 +251,9 @@ export default function Feed() {
       ) : articles.length === 0 ? (
         <div className="feed-empty">
           <p>No articles yet.</p>
-          {user
-            ? <button type="button" className="btn btn-primary" onClick={handleScrape} disabled={scraping}>
-                {scraping ? 'Scraping…' : 'Scrape sources now'}
-              </button>
-            : <p className="muted">Add some news sources, then click Refresh.</p>
-          }
+          <button type="button" className="btn btn-primary" onClick={handleScrape} disabled={scraping}>
+            {scraping ? 'Scraping…' : 'Scrape sources now'}
+          </button>
         </div>
       ) : (
         <div className="feed-grid">
