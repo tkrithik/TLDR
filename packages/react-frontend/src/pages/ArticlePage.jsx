@@ -42,9 +42,20 @@ function hostFromUrl(value) {
 }
 
 
+function normalizeCategory(value) {
+  const raw = String(value || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim()
+  const aliases = {
+    all: '', general: '', tech: 'technology', technology: 'technology', sports: 'sports', sport: 'sports',
+    politics: 'politics', political: 'politics', business: 'business', finance: 'business', economy: 'business',
+    science: 'science', health: 'science', entertainment: 'entertainment', culture: 'entertainment', arts: 'entertainment',
+    world: 'world', international: 'world', global: 'world',
+  }
+  return Object.prototype.hasOwnProperty.call(aliases, raw) ? aliases[raw] : raw
+}
+
 function articleCategories(article) {
   const values = [article?.category, ...(Array.isArray(article?.categories) ? article.categories : []), ...(Array.isArray(article?.tags) ? article.tags : [])]
-  return [...new Set(values.map((value) => String(value || '').toLowerCase().trim()).filter((value) => value && value !== 'general' && value !== 'all'))]
+  return [...new Set(values.map(normalizeCategory).filter((value) => value && value !== 'general' && value !== 'all'))]
 }
 
 function categoryLabel(value) {

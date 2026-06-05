@@ -207,14 +207,14 @@ function isValidNewsSummary(summary) {
   const value = cleanText(summary);
   // Save gate: strict enough to block nav/ad pages, loose enough not to drop all
   // articles when the model returns a concise article or fallback text is used.
-  if (value.length < 120) return false;
+  if (value.length < 80) return false;
   if (NON_NEWS_PATTERNS.some((pattern) => pattern.test(value))) return false;
   const boilerplateHits = BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(value)).length;
   if (boilerplateHits >= 2) return false;
   const words = value.split(/\s+/).filter(Boolean);
   const uniqueWords = new Set(words.map((word) => word.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((word) => word.length >= 4));
   const sentenceCount = value.split(/(?<=[.!?])\s+/).filter((part) => part.split(/\s+/).length >= 7).length;
-  return words.length >= 35 && uniqueWords.size >= 25 && sentenceCount >= 1;
+  return words.length >= 20 && uniqueWords.size >= 15 && sentenceCount >= 1;
 }
 
 function findFirstUrl(text) {
@@ -560,6 +560,7 @@ async function scrapeSource(source) {
 async function saveCandidatesForSource(source, candidates) {
   let saved = 0;
   let duplicates = 0;
+  let repaired = 0;
 
   for (const candidate of candidates) {
     const enriched = await enrichCandidate(candidate);
@@ -580,25 +581,12 @@ async function saveCandidatesForSource(source, candidates) {
       }
     }
     const digest = hashContent(`${title}\n${enriched.text}`);
-    const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id videoUrl videoEmbed imageUrl").lean();
-    if (existingByUrl) {
-      const updates = {};
-      if (!existingByUrl.videoUrl && enriched.videoUrl) updates.videoUrl = enriched.videoUrl;
-      if (!existingByUrl.videoEmbed && enriched.videoEmbed) updates.videoEmbed = enriched.videoEmbed;
-      if (!existingByUrl.imageUrl && enriched.imageUrl) updates.imageUrl = enriched.imageUrl;
-      if (Object.keys(updates).length > 0) {
-        await Article.findByIdAndUpdate(existingByUrl._id, updates);
-      }
-      duplicates++;
-      continue;
-    }
-    if (await isDuplicate(digest)) { duplicates++; continue; }
 
     let summary = "";
     try {
       const summaryInput = enriched.text && enriched.text.length >= MIN_BODY_CHARS_FOR_SUMMARY
         ? enriched.text
-        : `${candidate.title}. ${enriched.text || candidate.title}`;
+        : `${candidate.title}. ${enriched.text || candidate.body || candidate.title}`;
       summary = await summarize(summaryInput);
     } catch (err) {
       console.warn(`[scraper] summarize failed for ${candidate.url}:`, err.message);
@@ -614,8 +602,23 @@ async function saveCandidatesForSource(source, candidates) {
       }
     }
 
-    const categories = guessCategories(title, enriched.text, candidate.tags || []);
+    const categories = guessCategories(title, `${enriched.text} ${summary}`, candidate.tags || []);
     const category = categories[0] || "general";
+
+    const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id title summary category categories tags videoUrl videoEmbed imageUrl publishedAt").lean();
+    if (existingByUrl) {
+      const updates = { title, category, categories, tags: categories };
+      if (!isValidNewsSummary(existingByUrl.summary || "")) updates.summary = summary;
+      if (!existingByUrl.videoUrl && enriched.videoUrl) updates.videoUrl = enriched.videoUrl;
+      if (!existingByUrl.videoEmbed && enriched.videoEmbed) updates.videoEmbed = enriched.videoEmbed;
+      if (!existingByUrl.imageUrl && enriched.imageUrl) updates.imageUrl = enriched.imageUrl;
+      if (!existingByUrl.publishedAt && candidate.publishedAt instanceof Date && !Number.isNaN(candidate.publishedAt.valueOf())) updates.publishedAt = candidate.publishedAt;
+      await Article.findByIdAndUpdate(existingByUrl._id, updates);
+      repaired++;
+      duplicates++;
+      continue;
+    }
+    if (await isDuplicate(digest)) { duplicates++; continue; }
 
     await Article.create({
       sourceId: source._id,
@@ -637,7 +640,7 @@ async function saveCandidatesForSource(source, candidates) {
   }
 
   await Source.findByIdAndUpdate(source._id, { lastScrapedAt: new Date() });
-  return { saved, duplicates };
+  return { saved, duplicates, repaired };
 }
 
 export async function scrapeOneSource(source) {
@@ -655,7 +658,7 @@ export async function scrapeOneSource(source) {
  */
 export async function scrapeAllSources() {
   const sources = await Source.find({ active: true }).lean();
-  let discovered = 0, saved = 0, duplicates = 0, failedSources = 0;
+  let discovered = 0, saved = 0, duplicates = 0, repaired = 0, failedSources = 0;
 
   for (const source of sources) {
     try {
@@ -663,10 +666,11 @@ export async function scrapeAllSources() {
       discovered += result.discovered;
       saved += result.saved;
       duplicates += result.duplicates;
+      repaired += result.repaired || 0;
     } catch (err) {
       failedSources++;
       console.error(`[scraper] failed source ${source.url}`, err.message);
     }
   }
-  return { sources: sources.length, discovered, saved, duplicates, failedSources };
+  return { sources: sources.length, discovered, saved, duplicates, repaired, failedSources };
 }

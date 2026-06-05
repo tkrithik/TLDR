@@ -73,6 +73,11 @@ function articleCategorySet(article) {
   return [...new Set([...normalized, ...inferredCategories(article)])];
 }
 
+function normalizedArticleCategories(article) {
+  const cats = articleCategorySet(article).filter((cat) => cat && cat !== "all" && cat !== "general");
+  return cats.length > 0 ? cats : ["general"];
+}
+
 const STOP_WORDS = new Set([
   "the", "and", "for", "with", "from", "that", "this", "are", "was", "were", "will", "has", "have", "had", "not", "but", "you", "your", "their", "they", "his", "her", "its", "about", "after", "before", "over", "under", "into", "than", "then", "when", "what", "who", "why", "how", "new", "news", "says", "said", "live", "video", "photos", "update", "updates", "latest",
 ]);
@@ -290,11 +295,14 @@ function toSingleArticleStory(article) {
 }
 
 function cleanSummaryText(value) {
-  const seen = new Set();
-  const sentences = String(value || "")
+  const raw = String(value || "")
     .replace(/\u00a0/g, " ")
     .replace(/\s+/g, " ")
-    .trim()
+    .trim();
+  if (!raw) return "";
+
+  const seen = new Set();
+  const sentences = raw
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length >= 30)
@@ -306,7 +314,21 @@ function cleanSummaryText(value) {
       seen.add(key);
       return true;
     });
-  return sentences.join(" ").trim();
+
+  const cleaned = sentences.join(" ").trim();
+  if (cleaned) return cleaned;
+
+  // Last-resort display cleanup. Older saved articles may be valid but not split
+  // into normal sentences, or may contain one bad boilerplate phrase that caused
+  // the old cleaner to erase the whole card. Keep the article visible unless it
+  // is clearly one of the known non-news/alert pages.
+  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(raw))) return "";
+  let fallback = raw;
+  for (const pattern of SUMMARY_BOILERPLATE_PATTERNS) {
+    fallback = fallback.replace(pattern, " ");
+  }
+  fallback = fallback.replace(/\s+/g, " ").trim();
+  return fallback.length >= 45 ? fallback : raw;
 }
 
 function trimSummary(value, maxLength = 420) {
@@ -383,11 +405,11 @@ function toStory(group) {
     relatedSources: allSources,
     title: primary.title,
     url: primary.url,
-    category: articleCategorySet(primary)[0] || primary.category || "general",
-    categories: [...new Set(articles.flatMap(articleCategorySet))],
-    tags: [...new Set(articles.flatMap(articleCategorySet))],
-    summary: combinedSummary(articles),
-    blurb: makeBlurb(combinedSummary(articles)),
+    category: normalizedArticleCategories(primary)[0] || "general",
+    categories: [...new Set(articles.flatMap(normalizedArticleCategories))],
+    tags: [...new Set(articles.flatMap(normalizedArticleCategories))],
+    summary: combinedSummary(articles) || cleanSummaryText(primary.summary),
+    blurb: makeBlurb(combinedSummary(articles) || primary.summary),
     imageUrl: withImage?.imageUrl || primary.imageUrl || "",
     videoUrl: withVideo?.videoUrl || primary.videoUrl || "",
     videoEmbed: withVideo?.videoEmbed || primary.videoEmbed || "",
@@ -544,7 +566,8 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
       const u = await User.findById(req.user.id).select("bookmarks").lean();
       bookmarked = (u?.bookmarks ?? []).some((b) => b.toString() === req.params.id);
     }
-    return res.json({ ...doc, bookmarked });
+    const normalized = toSingleArticleStory(doc);
+    return res.json({ ...normalized, bookmarked });
   } catch (err) {
     console.error("GET /api/articles/:id", err);
     return res.status(500).json({ error: "Failed to get article" });

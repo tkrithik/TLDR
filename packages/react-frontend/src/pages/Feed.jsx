@@ -14,6 +14,17 @@ const CATEGORY_LABELS = {
   world: 'World',
 }
 
+function normalizeCategory(value) {
+  const raw = String(value || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim()
+  const aliases = {
+    all: '', general: '', tech: 'technology', technology: 'technology', sports: 'sports', sport: 'sports',
+    politics: 'politics', political: 'politics', business: 'business', finance: 'business', economy: 'business',
+    science: 'science', health: 'science', entertainment: 'entertainment', culture: 'entertainment', arts: 'entertainment',
+    world: 'world', international: 'world', global: 'world',
+  }
+  return Object.prototype.hasOwnProperty.call(aliases, raw) ? aliases[raw] : raw
+}
+
 function timeAgo(dateStr) {
   if (!dateStr) return ''
   const d = new Date(dateStr)
@@ -97,7 +108,7 @@ export default function Feed() {
   const searchRef = useRef(null)
 
   const page = parseInt(searchParams.get('page') || '1', 10)
-  const category = searchParams.get('category') || ''
+  const category = normalizeCategory(searchParams.get('category') || '')
   const q = searchParams.get('q') || ''
   const hasVideo = searchParams.get('video') === '1'
 
@@ -133,7 +144,7 @@ export default function Feed() {
 
   function setParam(key, value) {
     const p = new URLSearchParams(searchParams)
-    const normalizedValue = (key === 'category' && (value === 'general' || value === 'all')) ? '' : value
+    const normalizedValue = key === 'category' ? normalizeCategory(value) : value
     if (normalizedValue) p.set(key, normalizedValue)
     else p.delete(key)
     p.delete('page')
@@ -151,7 +162,7 @@ export default function Feed() {
     setScrapeMsg('')
     try {
       const r = await triggerScrape()
-      setScrapeMsg(`Done — ${r.saved} new articles from ${r.sources} sources`)
+      setScrapeMsg(`Done — ${r.saved} new articles${r.repaired ? `, ${r.repaired} repaired` : ''} from ${r.sources} sources`)
       load()
     } catch (e) {
       setScrapeMsg(`Scrape error: ${e.message}`)
@@ -165,7 +176,7 @@ export default function Feed() {
     setParam('q', searchRef.current?.value || '')
   }
 
-  const allCats = ['', ...categories.filter((cat) => cat && cat !== 'general' && cat !== 'all')]
+  const allCats = ['', ...[...new Set(categories.map(normalizeCategory).filter((cat) => cat && cat !== 'general' && cat !== 'all'))]]
 
   return (
     <div className="feed-page">
