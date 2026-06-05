@@ -150,13 +150,16 @@ function hasEnoughNewsSignals(text) {
 
 function isValidNewsSummary(summary) {
   const value = cleanText(summary);
-  if (value.length < 650) return false;
+  // Save gate: strict enough to block nav/ad pages, loose enough not to drop all
+  // articles when the model returns a concise article or fallback text is used.
+  if (value.length < 120) return false;
   if (NON_NEWS_PATTERNS.some((pattern) => pattern.test(value))) return false;
-  if (BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value))) return false;
-  const paragraphs = value.split(/\n{2,}|(?<=\.)\s+(?=[A-Z])/).filter((part) => part.split(/\s+/).length >= 20);
+  const boilerplateHits = BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(value)).length;
+  if (boilerplateHits >= 2) return false;
   const words = value.split(/\s+/).filter(Boolean);
   const uniqueWords = new Set(words.map((word) => word.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((word) => word.length >= 4));
-  return words.length >= 120 && paragraphs.length >= 3 && uniqueWords.size >= 70;
+  const sentenceCount = value.split(/(?<=[.!?])\s+/).filter((part) => part.split(/\s+/).length >= 7).length;
+  return words.length >= 35 && uniqueWords.size >= 25 && sentenceCount >= 1;
 }
 
 function findFirstUrl(text) {
@@ -541,8 +544,13 @@ async function saveCandidatesForSource(source, candidates) {
     }
 
     if (!isValidNewsSummary(summary)) {
-      console.warn(`[scraper] skipped item with missing/invalid summary: ${candidate.url}`);
-      continue;
+      const fallbackSummary = cleanArticleText(enriched.text || candidate.body || "");
+      if (isValidNewsSummary(fallbackSummary)) {
+        summary = fallbackSummary.slice(0, 3000);
+      } else {
+        console.warn(`[scraper] skipped item with missing/invalid summary: ${candidate.url}`);
+        continue;
+      }
     }
 
     const category = guessCategory(title, enriched.text);

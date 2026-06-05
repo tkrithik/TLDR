@@ -196,13 +196,16 @@ const SUMMARY_BOILERPLATE_PATTERNS = [
 
 function hasUsefulSummary(value) {
   const text = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-  if (text.length < 650) return false;
+  // Display gate only: reject obvious garbage, but do not hide every article just
+  // because the AI article is shorter than ideal or Anthropic is not configured.
+  if (text.length < 120) return false;
   if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
-  if (SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  const boilerplateHits = SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(text)).length;
+  if (boilerplateHits >= 2) return false;
   const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
   const uniqueWords = new Set(words.filter((word) => word.length >= 4));
-  const sentenceCount = text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 8).length;
-  return words.length >= 120 && uniqueWords.size >= 70 && sentenceCount >= 5;
+  const sentenceCount = text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 7).length;
+  return words.length >= 35 && uniqueWords.size >= 25 && sentenceCount >= 1;
 }
 
 function cleanSummaryText(value) {
@@ -364,10 +367,19 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
       .lean();
 
     const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary));
-    const total = groupedItems.length;
+
+    // If grouping/quality gates somehow remove everything, fall back to clean raw
+    // articles instead of returning an empty feed. This prevents the UI from saying
+    // "No articles yet" when MongoDB actually has usable articles.
+    const visibleItems = groupedItems.length > 0
+      ? groupedItems
+      : rawItems
+          .filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary))
+          .map((article) => toStory({ articles: [article] }));
+    const total = visibleItems.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const skip = (page - 1) * limit;
-    const items = groupedItems.slice(skip, skip + limit);
+    const items = visibleItems.slice(skip, skip + limit);
 
     res.json({ items, total, page, pages, limit });
   } catch (err) {
