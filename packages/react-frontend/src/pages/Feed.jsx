@@ -112,7 +112,10 @@ export default function Feed() {
         q: q || undefined,
         hasVideo: hasVideo || undefined,
       })
-      setArticles((data.items || []).filter((article) => article.summary && article.summary.trim().length >= 80))
+      // The backend already filters out boilerplate and bad articles. Do not apply a
+      // second strict client-side length gate, because it can make a valid result set
+      // look empty after scraping.
+      setArticles(data.items || [])
       setTotal(data.total)
       setPages(data.pages)
     } catch (e) {

@@ -505,8 +505,15 @@ async function saveCandidatesForSource(source, candidates) {
       continue;
     }
     if (!hasEnoughNewsSignals(enriched.text)) {
-      console.warn(`[scraper] skipped non-article or boilerplate-only item: ${candidate.url}`);
-      continue;
+      // RSS feeds from some publishers include only a short but useful description.
+      // Use it as a fallback when the page itself was blocked or mostly boilerplate.
+      const fallbackText = cleanArticleText(stripHtml(candidate.body || ""));
+      if (hasEnoughNewsSignals(fallbackText)) {
+        enriched.text = fallbackText;
+      } else {
+        console.warn(`[scraper] skipped non-article or boilerplate-only item: ${candidate.url}`);
+        continue;
+      }
     }
     const digest = hashContent(`${title}\n${enriched.text}`);
     const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id videoUrl videoEmbed imageUrl").lean();

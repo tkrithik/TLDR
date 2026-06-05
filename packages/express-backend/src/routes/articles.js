@@ -363,7 +363,7 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
       .populate("sourceId", "name url")
       .lean();
 
-    const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulSummary(item.summary));
+    const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary));
     const total = groupedItems.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const skip = (page - 1) * limit;
