@@ -1642,3 +1642,11 @@ table.data tr:last-child td {
   padding: 0.45rem 0.75rem;
   text-decoration: none;
 }
+
+.article-tldr-text p {
+  margin: 0 0 1rem;
+}
+
+.article-tldr-text p:last-child {
+  margin-bottom: 0;
+}

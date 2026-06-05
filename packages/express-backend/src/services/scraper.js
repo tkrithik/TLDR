@@ -49,6 +49,34 @@ function stripHtml(value) {
 
 const NON_ARTICLE_URL_PATTERN = /\/(?:alerts?|newsletter|newsletters|topics?|section|sections|category|categories|tag|author|authors|search|privacy|terms|about|contact|video|videos|live)(?:\/|$)|[?&](?:output|view)=|\.(?:jpg|jpeg|png|gif|webp|mp4|pdf)(?:[?#]|$)/i;
 
+
+const BAD_TITLE_PATTERNS = [
+  /^skip (advertisement|to (site index|content|main content|navigation))$/i,
+  /^(advertisement|site index|skip to content|skip to main content|skip navigation)$/i,
+  /^(home|latest news|breaking news|news alerts?|top stories|watch live|live updates)$/i,
+  /^(subscribe|sign up|log in|login|menu|search|share|follow us)$/i,
+  /^\s*(news|video|photos?)\s*$/i,
+];
+
+function isValidNewsTitle(title) {
+  const value = cleanText(title).replace(/^[\s:|\-–—]+|[\s:|\-–—]+$/g, "");
+  if (value.length < 15 || value.length > 220) return false;
+  if (BAD_TITLE_PATTERNS.some((pattern) => pattern.test(value))) return false;
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length < 3) return false;
+  const navWords = words.filter((word) => /^(skip|advertisement|site|index|content|home|menu|search|subscribe|login|share)$/i.test(word)).length;
+  if (navWords / words.length > 0.45) return false;
+  return /[a-z]/i.test(value);
+}
+
+function chooseTitle(...titles) {
+  for (const title of titles) {
+    const value = cleanText(title).replace(/\s+[|—-]\s+(CNN|NBC News|The New York Times|Fox News|Reuters|AP News|BBC News|NPR).*$/i, "");
+    if (isValidNewsTitle(value)) return value;
+  }
+  return "";
+}
+
 const BOILERPLATE_PATTERNS = [
   /^(advertisement|subscribe|sign up|log in|login|share|follow us|read more|related|cookie|privacy|terms|all rights reserved)$/i,
   /©\s*\d{4}/i,
@@ -122,11 +150,13 @@ function hasEnoughNewsSignals(text) {
 
 function isValidNewsSummary(summary) {
   const value = cleanText(summary);
-  if (value.length < 80) return false;
+  if (value.length < 650) return false;
   if (NON_NEWS_PATTERNS.some((pattern) => pattern.test(value))) return false;
   if (BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value))) return false;
-  const sentences = value.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 7);
-  return sentences.length >= 1;
+  const paragraphs = value.split(/\n{2,}|(?<=\.)\s+(?=[A-Z])/).filter((part) => part.split(/\s+/).length >= 20);
+  const words = value.split(/\s+/).filter(Boolean);
+  const uniqueWords = new Set(words.map((word) => word.toLowerCase().replace(/[^a-z0-9]/g, "")).filter((word) => word.length >= 4));
+  return words.length >= 120 && paragraphs.length >= 3 && uniqueWords.size >= 70;
 }
 
 function findFirstUrl(text) {
@@ -249,7 +279,8 @@ function parseRss(url, body) {
   const items = [];
   const nodes = $("item").length > 0 ? $("item") : $("entry");
   nodes.each((_idx, el) => {
-    const title = cleanText($(el).find("title").first().text());
+    const rssTitle = cleanText($(el).find("title").first().text());
+    const title = chooseTitle(rssTitle);
     const linkTag = $(el).find("link").first();
     const linkRaw = cleanText(linkTag.attr("href") || linkTag.text());
     const description = cleanText($(el).find("description").first().text());
@@ -295,9 +326,9 @@ function parseHtml(url, body) {
   $("a[href]").each((_idx, el) => {
     if (items.length >= MAX_ITEMS_PER_SOURCE) return;
     const href = $(el).attr("href");
-    const title = cleanText($(el).text());
+    const title = chooseTitle($(el).attr("aria-label"), $(el).attr("title"), $(el).text());
     const link = toAbsoluteUrl(url, href);
-    if (!title || title.length < 15 || !link) return;
+    if (!title || !link) return;
     if (!/^https?:\/\//i.test(link)) return;
     if (NON_ARTICLE_URL_PATTERN.test(link)) return;
     if (seen.has(link)) return;
@@ -319,10 +350,10 @@ async function fetchPage(url) {
   return String(response.data ?? "");
 }
 
-function extractJsonLdArticleBody($) {
-  let articleBody = "";
+function extractJsonLdArticleMeta($) {
+  const meta = { title: "", body: "" };
   $("script[type='application/ld+json']").each((_i, el) => {
-    if (articleBody) return;
+    if (meta.title && meta.body) return;
     const raw = $(el).contents().text();
     try {
       const parsed = JSON.parse(raw);
@@ -331,9 +362,9 @@ function extractJsonLdArticleBody($) {
         const item = stack.shift();
         if (!item || typeof item !== "object") continue;
         const type = Array.isArray(item["@type"]) ? item["@type"].join(" ") : String(item["@type"] || "");
-        if (/NewsArticle|Article|BlogPosting/i.test(type) && item.articleBody) {
-          articleBody = cleanText(item.articleBody);
-          break;
+        if (/NewsArticle|Article|BlogPosting/i.test(type)) {
+          if (!meta.title) meta.title = chooseTitle(item.headline, item.name);
+          if (!meta.body && item.articleBody) meta.body = cleanText(item.articleBody);
         }
         for (const value of Object.values(item)) {
           if (Array.isArray(value)) stack.push(...value);
@@ -344,7 +375,23 @@ function extractJsonLdArticleBody($) {
       // Ignore malformed JSON-LD blocks.
     }
   });
-  return articleBody;
+  return meta;
+}
+
+function extractBestTitle($, fallbackTitle = "") {
+  const jsonLd = extractJsonLdArticleMeta($);
+  return chooseTitle(
+    jsonLd.title,
+    $("meta[property='og:title']").attr("content"),
+    $("meta[name='twitter:title']").attr("content"),
+    $("h1").first().text(),
+    fallbackTitle,
+    $("title").first().text(),
+  );
+}
+
+function extractJsonLdArticleBody($) {
+  return extractJsonLdArticleMeta($).body;
 }
 
 function scoreArticleContainer($, el) {
@@ -363,9 +410,10 @@ function scoreArticleContainer($, el) {
   return { text, score: text.length + paragraphScore + commaCount * 10 - linkPenalty - boilerplatePenalty };
 }
 
-function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "") {
+function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "", fallbackTitle = "") {
   const $ = cheerio.load(html);
   const jsonLdBody = extractJsonLdArticleBody($);
+  const title = extractBestTitle($, fallbackTitle);
 
   $("script, style, noscript, nav, header, footer, aside, form, button, svg, canvas, [aria-label*='share' i], [class*='ad' i], [id*='ad' i], [class*='promo' i], [class*='newsletter' i], [class*='related' i], [class*='comment' i], [class*='share' i], [class*='social' i], [class*='signup' i], [class*='paywall' i], [class*='breadcrumb' i], [data-testid*='ad' i], [data-testid*='share' i], [data-testid*='related' i]").remove();
   const selectors = [
@@ -409,15 +457,16 @@ function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "") {
 
   const imageUrl = extractImageFromHtml($, baseUrl);
   const { videoUrl, videoEmbed } = extractVideoFromHtml($, baseUrl);
-  return { text: text.slice(0, 16000), imageUrl, videoUrl, videoEmbed };
+  return { title, text: text.slice(0, 16000), imageUrl, videoUrl, videoEmbed };
 }
 
 async function enrichCandidate(candidate) {
   try {
     const articleHtml = await fetchPage(candidate.url);
-    const extracted = extractArticleBodyFromHtml(articleHtml, candidate.url, candidate.body);
+    const extracted = extractArticleBodyFromHtml(articleHtml, candidate.url, candidate.body, candidate.title);
     if (extracted.text && extracted.text.length >= MIN_BODY_CHARS_FOR_SUMMARY) {
       return {
+        title: extracted.title || candidate.title,
         text: extracted.text,
         imageUrl: extracted.imageUrl || candidate.imageUrl || "",
         videoUrl: extracted.videoUrl || candidate.videoUrl || "",
@@ -429,6 +478,7 @@ async function enrichCandidate(candidate) {
   }
 
   return {
+    title: candidate.title,
     text: cleanArticleText(stripHtml(candidate.body)),
     imageUrl: candidate.imageUrl || "",
     videoUrl: candidate.videoUrl || "",
@@ -449,11 +499,16 @@ async function saveCandidatesForSource(source, candidates) {
 
   for (const candidate of candidates) {
     const enriched = await enrichCandidate(candidate);
+    const title = chooseTitle(enriched.title, candidate.title);
+    if (!isValidNewsTitle(title)) {
+      console.warn(`[scraper] skipped item with bad title: ${candidate.title} (${candidate.url})`);
+      continue;
+    }
     if (!hasEnoughNewsSignals(enriched.text)) {
       console.warn(`[scraper] skipped non-article or boilerplate-only item: ${candidate.url}`);
       continue;
     }
-    const digest = hashContent(`${candidate.title}\n${enriched.text}`);
+    const digest = hashContent(`${title}\n${enriched.text}`);
     const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id videoUrl videoEmbed imageUrl").lean();
     if (existingByUrl) {
       const updates = {};
@@ -483,11 +538,11 @@ async function saveCandidatesForSource(source, candidates) {
       continue;
     }
 
-    const category = guessCategory(candidate.title, enriched.text);
+    const category = guessCategory(title, enriched.text);
 
     await Article.create({
       sourceId: source._id,
-      title: candidate.title,
+      title,
       url: candidate.url,
       contentHash: digest,
       summary,

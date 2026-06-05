@@ -22,7 +22,7 @@ export default function Home() {
             <div className="feature-tile">
               <div className="feature-icon">🤖</div>
               <h3>AI summaries</h3>
-              <p>Every article is condensed into 2-4 sentences by Claude AI, so you can scan headlines and understand stories in seconds.</p>
+              <p>Every story becomes a short AI-written article built from clean source coverage, with only a blurb shown in the feed.</p>
             </div>
           </ScrollReveal>
           <ScrollReveal>

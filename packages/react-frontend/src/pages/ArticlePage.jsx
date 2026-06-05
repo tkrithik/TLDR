@@ -33,6 +33,19 @@ function normalizeEmbedUrl(value) {
   return id ? `https://www.youtube.com/embed/${id}` : withProtocol
 }
 
+function articleParagraphs(text) {
+  const value = String(text || '').trim()
+  if (!value) return []
+  const explicit = value.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+  if (explicit.length >= 2) return explicit
+  const sentences = value.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).filter(Boolean)
+  const paragraphs = []
+  for (let i = 0; i < sentences.length; i += 2) {
+    paragraphs.push(sentences.slice(i, i + 2).join(' '))
+  }
+  return paragraphs.filter(Boolean)
+}
+
 function VideoEmbed({ article }) {
   if (article.videoEmbed) {
     const src = normalizeEmbedUrl(article.videoEmbed)
@@ -201,19 +214,23 @@ export default function ArticlePage() {
       {/* Video player */}
       {hasVideo && <VideoEmbed article={article} />}
 
-      {/* AI Summary */}
+      {/* AI-generated article */}
       {article.summary && (
-        <section className="article-tldr-block" aria-labelledby="tldr-heading">
+        <section className="article-tldr-block" aria-labelledby="article-heading">
           <div className="article-tldr-label">
-            <span className="tldr-badge">AI Summary</span>
+            <span className="tldr-badge">AI-written article</span>
           </div>
-          <p className="article-tldr-text">{article.summary}</p>
+          <div className="article-tldr-text">
+            {articleParagraphs(article.summary).map((paragraph, index) => (
+              <p key={index}>{paragraph}</p>
+            ))}
+          </div>
         </section>
       )}
 
       {/* CTA to original */}
       <div className="article-read-more">
-        <p className="muted">This is an AI-generated summary. For the full story:</p>
+        <p className="muted">This AI-written article was generated from source coverage. For the original reporting:</p>
         <a
           href={article.url}
           target="_blank"

@@ -56,7 +56,7 @@ function ArticleCard({ article }) {
           <span className="feed-card-time">{timeAgo(article.publishedAt || article.scrapedAt)}</span>
         </div>
         <h2 className="feed-card-title">{article.title}</h2>
-        {article.summary && <p className="feed-card-summary">{makeBlurb(article.summary)}</p>}
+        {(article.blurb || article.summary) && <p className="feed-card-summary">{makeBlurb(article.blurb || article.summary)}</p>}
         {article.isCombinedStory && <p className="feed-card-combined">Combined coverage from multiple sources</p>}
       </div>
     </Link>

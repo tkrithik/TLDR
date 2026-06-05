@@ -92,6 +92,24 @@ function sourceUrl(article) {
   return article.sourceId?.url || article.url;
 }
 
+const BAD_TITLE_PATTERNS = [
+  /^skip (advertisement|to (site index|content|main content|navigation))$/i,
+  /^(advertisement|site index|skip to content|skip to main content|skip navigation)$/i,
+  /^(home|latest news|breaking news|news alerts?|top stories|watch live|live updates)$/i,
+  /^(subscribe|sign up|log in|login|menu|search|share|follow us)$/i,
+  /^\s*(news|video|photos?)\s*$/i,
+];
+
+function hasUsefulTitle(value) {
+  const title = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  if (title.length < 15 || title.length > 220) return false;
+  if (BAD_TITLE_PATTERNS.some((pattern) => pattern.test(title))) return false;
+  const words = title.split(/\s+/).filter(Boolean);
+  if (words.length < 3) return false;
+  const navWords = words.filter((word) => /^(skip|advertisement|site|index|content|home|menu|search|subscribe|login|share)$/i.test(word)).length;
+  return navWords / words.length <= 0.45;
+}
+
 const SUMMARY_NON_NEWS_PATTERNS = [
   /news alerts? there are no new alerts at this time/i,
   /highlights of .* in-depth, investigative, and interactive reporting/i,
@@ -121,12 +139,13 @@ const SUMMARY_BOILERPLATE_PATTERNS = [
 
 function hasUsefulSummary(value) {
   const text = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-  if (text.length < 80) return false;
+  if (text.length < 650) return false;
   if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
   if (SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(text))) return false;
   const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
   const uniqueWords = new Set(words.filter((word) => word.length >= 4));
-  return words.length >= 18 && uniqueWords.size >= 14;
+  const sentenceCount = text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 8).length;
+  return words.length >= 120 && uniqueWords.size >= 70 && sentenceCount >= 5;
 }
 
 function cleanSummaryText(value) {
@@ -157,30 +176,51 @@ function trimSummary(value, maxLength = 420) {
   return clipped.slice(0, cutAt > 120 ? cutAt : maxLength).trim() + "…";
 }
 
+function splitParagraphs(value) {
+  const text = cleanSummaryText(value);
+  if (!text) return [];
+  const explicit = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  if (explicit.length >= 3) return explicit;
+  const sentences = text.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+  const paragraphs = [];
+  for (let i = 0; i < sentences.length; i += 2) {
+    paragraphs.push(sentences.slice(i, i + 2).join(" "));
+  }
+  return paragraphs.filter((para) => para.split(/\s+/).length >= 12);
+}
+
+function sentenceKey(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter((word) => word.length >= 5).slice(0, 18).join(" ");
+}
+
 function combinedSummary(articles) {
-  const pieces = articles
-    .map((article) => trimSummary(article.summary || article.title || "", 280))
-    .filter(Boolean);
-
-  if (pieces.length <= 1) return pieces[0] || "";
-
-  const uniqueSentences = [];
+  const paragraphs = [];
   const seen = new Set();
-  for (const piece of pieces) {
-    for (const sentence of piece.split(/(?<=[.!?])\s+/)) {
-      const clean = cleanSummaryText(sentence);
-      if (!clean) continue;
-      const key = clean.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-      if (seen.has(key)) continue;
+
+  for (const article of articles) {
+    for (const para of splitParagraphs(article.summary)) {
+      if (SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(para))) continue;
+      const key = sentenceKey(para);
+      if (!key || seen.has(key)) continue;
       seen.add(key);
-      uniqueSentences.push(clean);
-      break;
+      paragraphs.push(para);
+      if (paragraphs.length >= 9) break;
     }
-    if (uniqueSentences.length >= 3) break;
+    if (paragraphs.length >= 9) break;
   }
 
-  const summary = uniqueSentences.join(" ");
-  return trimSummary(summary || pieces[0], 520);
+  const articleText = paragraphs.join("\n\n").trim();
+  if (articleText.split(/\s+/).length >= 180) return articleText;
+
+  return cleanSummaryText(articles.map((article) => article.summary).join(" "));
+}
+
+function makeBlurb(value, maxLength = 260) {
+  const text = cleanSummaryText(value).replace(/\n+/g, " ");
+  if (text.length <= maxLength) return text;
+  const clipped = text.slice(0, maxLength);
+  const cutAt = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf(" "));
+  return clipped.slice(0, cutAt > 120 ? cutAt : maxLength).trim() + "…";
 }
 
 function toStory(group) {
@@ -204,6 +244,7 @@ function toStory(group) {
     title: primary.title,
     url: primary.url,
     summary: combinedSummary(articles),
+    blurb: makeBlurb(combinedSummary(articles)),
     imageUrl: withImage?.imageUrl || primary.imageUrl || "",
     videoUrl: withVideo?.videoUrl || primary.videoUrl || "",
     videoEmbed: withVideo?.videoEmbed || primary.videoEmbed || "",
@@ -216,7 +257,7 @@ function toStory(group) {
 function groupArticles(articles) {
   const groups = [];
   for (const article of articles) {
-    if (!hasUsefulSummary(article.summary)) continue;
+    if (!hasUsefulTitle(article.title) || !hasUsefulSummary(article.summary)) continue;
     const match = groups.find((group) => areSameStory(article, group));
     if (match) {
       match.articles.push(article);
@@ -301,7 +342,7 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
         .sort({ publishedAt: -1, scrapedAt: -1, createdAt: -1 })
         .populate("sourceId", "name url")
         .lean();
-      const usefulDocs = docs.filter((article) => hasUsefulSummary(article.summary));
+      const usefulDocs = docs.filter((article) => hasUsefulTitle(article.title) && hasUsefulSummary(article.summary));
       if (usefulDocs.length === 0) return res.status(404).json({ error: "Story not found" });
       return res.json(toStory({ articles: usefulDocs }));
     }
@@ -312,7 +353,7 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
     const doc = await Article.findById(req.params.id)
       .populate("sourceId", "name url")
       .lean();
-    if (!doc || !hasUsefulSummary(doc.summary)) return res.status(404).json({ error: "Article not found" });
+    if (!doc || !hasUsefulTitle(doc.title) || !hasUsefulSummary(doc.summary)) return res.status(404).json({ error: "Article not found" });
 
     let bookmarked = false;
     if (req.user) {
