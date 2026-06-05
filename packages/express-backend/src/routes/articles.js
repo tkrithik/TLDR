@@ -267,27 +267,75 @@ const SUMMARY_BOILERPLATE_PATTERNS = [
   /advertisement/i,
 ];
 
-function hasUsefulSummary(value) {
-  const text = cleanSummaryText(value).replace(/\n+/g, " ").trim();
-  // Display gate only: reject obvious garbage, but do not hide every article just
-  // because the AI article is shorter than ideal or Anthropic is not configured.
-  if (text.length < 120) return false;
-  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
-  const boilerplateHits = SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(text)).length;
-  if (boilerplateHits >= 2) return false;
-  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
-  const uniqueWords = new Set(words.filter((word) => word.length >= 4));
-  const sentenceCount = text.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 7).length;
-  return words.length >= 35 && uniqueWords.size >= 25 && sentenceCount >= 1;
+
+function paragraphizeText(value, maxSentences = 12) {
+  const cleaned = String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!cleaned) return "";
+  const explicit = cleaned.split(/\n{2,}/).map((p) => p.trim()).filter((p) => p.split(/\s+/).length >= 18);
+  if (explicit.length >= 2) return explicit.join("\n\n");
+  const sentences = cleaned.replace(/\n+/g, " ").split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.split(/\s+/).length >= 7)
+    .slice(0, maxSentences);
+  if (sentences.length >= 2) {
+    const paragraphs = [];
+    for (let i = 0; i < sentences.length; i += 2) paragraphs.push(sentences.slice(i, i + 2).join(" "));
+    return paragraphs.join("\n\n").trim();
+  }
+  const words = cleaned.split(/\s+/).filter(Boolean).slice(0, 550);
+  if (words.length < 25) return "";
+  const paragraphs = [];
+  for (let i = 0; i < words.length; i += 85) {
+    const paragraph = words.slice(i, i + 85).join(" ").trim();
+    if (paragraph.split(/\s+/).length >= 20) paragraphs.push(paragraph);
+  }
+  return paragraphs.join("\n\n").trim();
 }
 
+function removeBadSummaryFragments(value) {
+  let text = String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  for (const pattern of [...SUMMARY_NON_NEWS_PATTERNS, ...SUMMARY_BOILERPLATE_PATTERNS]) {
+    text = text.replace(pattern, " ");
+  }
+  return text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function displayArticleText(value) {
+  const stripped = removeBadSummaryFragments(value);
+  if (!stripped) return "";
+  const paragraphs = stripped
+    .split(/\n{2,}/)
+    .map((paragraph) => removeBadSummaryFragments(paragraph).trim())
+    .filter((paragraph) => paragraph.length >= 30)
+    .filter((paragraph) => !SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(paragraph)))
+    .filter((paragraph) => SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(paragraph)).length < 2);
+  const candidate = paragraphs.length >= 2 ? paragraphs.join("\n\n") : paragraphizeText(stripped);
+  const flat = candidate.replace(/\n+/g, " ").trim();
+  if (flat.length < 45) return "";
+  if (SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(flat)).length >= 2) return "";
+  return candidate;
+}
+
+function hasUsefulSummary(value) {
+  const text = displayArticleText(value).replace(/\n+/g, " ").trim();
+  if (text.length < 80) return false;
+  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  const uniqueWords = new Set(words.filter((word) => word.length >= 4));
+  return words.length >= 20 && uniqueWords.size >= 15;
+}
 
 function hasDisplayableArticle(value) {
-  const text = cleanSummaryText(value).replace(/\n+/g, " ").trim();
-  if (text.length < 45) return false;
-  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
-  const boilerplateHits = SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(text)).length;
-  return boilerplateHits < 2;
+  return displayArticleText(value).replace(/\n+/g, " ").trim().length >= 45;
 }
 
 function toSingleArticleStory(article) {
@@ -295,51 +343,7 @@ function toSingleArticleStory(article) {
 }
 
 function cleanSummaryText(value) {
-  const raw = String(value || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  if (!raw) return "";
-  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(raw))) return "";
-
-  const explicitParagraphs = raw
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph.length >= 30)
-    .filter((paragraph) => !SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(paragraph)))
-    .filter((paragraph) => !SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(paragraph)));
-
-  if (explicitParagraphs.length >= 2) return explicitParagraphs.join("\n\n");
-
-  const seen = new Set();
-  const sentences = raw
-    .replace(/\n+/g, " ")
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= 30)
-    .filter((sentence) => !SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(sentence)))
-    .filter((sentence) => !SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(sentence)))
-    .filter((sentence) => {
-      const key = sentence.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-  if (sentences.length >= 4) {
-    const paragraphs = [];
-    for (let i = 0; i < sentences.length; i += 2) {
-      paragraphs.push(sentences.slice(i, i + 2).join(" "));
-    }
-    return paragraphs.join("\n\n").trim();
-  }
-
-  let fallback = raw;
-  for (const pattern of SUMMARY_BOILERPLATE_PATTERNS) fallback = fallback.replace(pattern, " ");
-  fallback = fallback.replace(/\s+/g, " ").trim();
-  return fallback.length >= 45 ? fallback : "";
+  return displayArticleText(value);
 }
 
 function trimSummary(value, maxLength = 420) {
@@ -404,6 +408,8 @@ function toStory(group) {
   const withVideo = articles.find((article) => article.videoEmbed || article.videoUrl);
   const withImage = articles.find((article) => article.imageUrl);
 
+  const synthesized = combinedSummary(articles) || cleanSummaryText(primary.summary) || displayArticleText(primary.summary);
+
   return {
     ...primary,
     // Single raw articles must keep their Mongo _id so clicking a feed card opens
@@ -419,8 +425,8 @@ function toStory(group) {
     category: normalizedArticleCategories(primary)[0] || "general",
     categories: [...new Set(articles.flatMap(normalizedArticleCategories))],
     tags: [...new Set(articles.flatMap(normalizedArticleCategories))],
-    summary: combinedSummary(articles) || cleanSummaryText(primary.summary),
-    blurb: makeBlurb(combinedSummary(articles) || primary.summary),
+    summary: synthesized,
+    blurb: makeBlurb(synthesized || primary.summary),
     imageUrl: withImage?.imageUrl || primary.imageUrl || "",
     videoUrl: withVideo?.videoUrl || primary.videoUrl || "",
     videoEmbed: withVideo?.videoEmbed || primary.videoEmbed || "",

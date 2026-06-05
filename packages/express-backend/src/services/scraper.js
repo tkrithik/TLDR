@@ -628,7 +628,19 @@ async function saveCandidatesForSource(source, candidates) {
       duplicates++;
       continue;
     }
-    if (await isDuplicate(digest)) { duplicates++; continue; }
+    const existingByHash = await Article.findOne({ contentHash: digest }).select("_id title summary category categories tags videoUrl videoEmbed imageUrl publishedAt").lean();
+    if (existingByHash) {
+      const updates = { title, category, categories, tags: categories };
+      if (!isLongEnoughGeneratedArticle(existingByHash.summary || "")) updates.summary = summary;
+      if (!existingByHash.videoUrl && enriched.videoUrl) updates.videoUrl = enriched.videoUrl;
+      if (!existingByHash.videoEmbed && enriched.videoEmbed) updates.videoEmbed = enriched.videoEmbed;
+      if (!existingByHash.imageUrl && enriched.imageUrl) updates.imageUrl = enriched.imageUrl;
+      if (!existingByHash.publishedAt && candidate.publishedAt instanceof Date && !Number.isNaN(candidate.publishedAt.valueOf())) updates.publishedAt = candidate.publishedAt;
+      await Article.findByIdAndUpdate(existingByHash._id, updates);
+      repaired++;
+      duplicates++;
+      continue;
+    }
 
     await Article.create({
       sourceId: source._id,
