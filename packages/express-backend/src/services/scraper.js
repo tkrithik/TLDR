@@ -36,9 +36,22 @@ function toAbsoluteUrl(baseUrl, maybeUrl) {
 }
 
 function cleanText(value) {
-  return String(value ?? "").replace(/\s+/g, " ").trim();
+  return String(value ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
+function stripHtml(value) {
+  const $ = cheerio.load(String(value ?? ""));
+  return cleanText($.text());
+}
+
+function isLowValueText(text) {
+  const value = cleanText(text);
+  if (value.length < 35) return true;
+  return /^(advertisement|subscribe|sign up|log in|login|share|follow us|read more|related|cookie|privacy|terms|all rights reserved)$/i.test(value);
+}
 
 function findFirstUrl(text) {
   const match = String(text || "").match(/https?:\/\/[^\s"'<>]+/i);
@@ -188,7 +201,7 @@ function parseRss(url, body) {
     items.push({
       title,
       url: link,
-      body: contentEncoded || contentText || summaryText || description || title,
+      body: stripHtml(contentEncoded || contentText || summaryText || description || title),
       publishedAt: parseDate(pubDateRaw),
       imageUrl: imageRaw ? (toAbsoluteUrl(url, imageRaw) || imageRaw) : "",
       videoUrl: videoAbs && isVideoUrl(videoAbs) ? videoAbs : "",
@@ -228,34 +241,117 @@ async function fetchPage(url) {
   return String(response.data ?? "");
 }
 
-function extractArticleBodyFromHtml(html, baseUrl) {
+function extractJsonLdArticleBody($) {
+  let articleBody = "";
+  $("script[type='application/ld+json']").each((_i, el) => {
+    if (articleBody) return;
+    const raw = $(el).contents().text();
+    try {
+      const parsed = JSON.parse(raw);
+      const stack = Array.isArray(parsed) ? [...parsed] : [parsed];
+      while (stack.length) {
+        const item = stack.shift();
+        if (!item || typeof item !== "object") continue;
+        const type = Array.isArray(item["@type"]) ? item["@type"].join(" ") : String(item["@type"] || "");
+        if (/NewsArticle|Article|BlogPosting/i.test(type) && item.articleBody) {
+          articleBody = cleanText(item.articleBody);
+          break;
+        }
+        for (const value of Object.values(item)) {
+          if (Array.isArray(value)) stack.push(...value);
+          else if (value && typeof value === "object") stack.push(value);
+        }
+      }
+    } catch {
+      // Ignore malformed JSON-LD blocks.
+    }
+  });
+  return articleBody;
+}
+
+function scoreArticleContainer($, el) {
+  const clone = $(el).clone();
+  clone.find("script, style, noscript, nav, header, footer, aside, form, button, iframe, figure, figcaption, .ad, .ads, .advertisement, .promo, .newsletter, .related, .comments, [class*='ad-'], [class*='share'], [class*='social'], [class*='newsletter'], [class*='related'], [id*='comments']").remove();
+  const paragraphs = clone.find("p")
+    .map((_i, p) => cleanText($(p).text()))
+    .get()
+    .filter((text) => !isLowValueText(text));
+  const text = cleanText(paragraphs.join(" "));
+  const linkText = cleanText(clone.find("a").text()).length;
+  const commaCount = (text.match(/,/g) || []).length;
+  const paragraphScore = paragraphs.filter((para) => para.length >= 80).length * 120;
+  const linkPenalty = text.length ? Math.min(400, Math.round((linkText / text.length) * 400)) : 400;
+  return { text, score: text.length + paragraphScore + commaCount * 10 - linkPenalty };
+}
+
+function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "") {
   const $ = cheerio.load(html);
-  const selectors = ["article", "main article", '[role="main"] article', ".article-body", ".entry-content", ".post-content"];
-  let text = "";
+  const jsonLdBody = extractJsonLdArticleBody($);
+
+  $("script, style, noscript, nav, header, footer, aside, form, button, svg, canvas, .ad, .ads, .advertisement, .promo, .newsletter, .related, .comments, [class*='ad-'], [class*='share'], [class*='social'], [class*='newsletter'], [class*='related'], [id*='comments']").remove();
+  const selectors = [
+    "article",
+    "main article",
+    '[role="article"]',
+    '[itemprop="articleBody"]',
+    '[data-testid*="article"]',
+    '[class*="article-body"]',
+    '[class*="articleBody"]',
+    '[class*="story-body"]',
+    '[class*="entry-content"]',
+    '[class*="post-content"]',
+    '[class*="body-content"]',
+    "main",
+  ];
+
+  const candidates = [];
+  if (jsonLdBody.length >= 300) candidates.push({ text: jsonLdBody, score: jsonLdBody.length + 1000 });
+
   for (const selector of selectors) {
-    text = cleanText(
-      $(selector).find("p").map((_idx, p) => $(p).text()).get().join(" "),
-    );
-    if (text.length >= 300) break;
+    $(selector).each((_idx, el) => {
+      const candidate = scoreArticleContainer($, el);
+      if (candidate.text.length >= 250) candidates.push(candidate);
+    });
   }
+
+  candidates.sort((a, b) => b.score - a.score);
+  let text = candidates[0]?.text || "";
+
   if (!text) {
-    text = cleanText($("p").map((_idx, p) => $(p).text()).get().join(" ")).slice(0, 16000);
+    const metaDescription = $("meta[property='og:description']").attr("content") ||
+      $("meta[name='description']").attr("content") ||
+      $("meta[name='twitter:description']").attr("content") ||
+      "";
+    text = cleanText(metaDescription) || cleanText(fallbackText);
   }
+
   const imageUrl = extractImageFromHtml($, baseUrl);
   const { videoUrl, videoEmbed } = extractVideoFromHtml($, baseUrl);
-  return { text, imageUrl, videoUrl, videoEmbed };
+  return { text: text.slice(0, 16000), imageUrl, videoUrl, videoEmbed };
 }
 
 async function enrichCandidate(candidate) {
-  if ((candidate.body ?? "").length >= 500) {
-    return { text: candidate.body, imageUrl: candidate.imageUrl || "", videoUrl: candidate.videoUrl || "", videoEmbed: candidate.videoEmbed || youtubeEmbedUrl(candidate.url) };
-  }
   try {
     const articleHtml = await fetchPage(candidate.url);
-    return extractArticleBodyFromHtml(articleHtml, candidate.url);
-  } catch {
-    return { text: candidate.body, imageUrl: candidate.imageUrl || "", videoUrl: candidate.videoUrl || "", videoEmbed: candidate.videoEmbed || youtubeEmbedUrl(candidate.url) };
+    const extracted = extractArticleBodyFromHtml(articleHtml, candidate.url, candidate.body);
+    if (extracted.text && extracted.text.length >= MIN_BODY_CHARS_FOR_SUMMARY) {
+      return {
+        text: extracted.text,
+        imageUrl: extracted.imageUrl || candidate.imageUrl || "",
+        videoUrl: extracted.videoUrl || candidate.videoUrl || "",
+        videoEmbed: extracted.videoEmbed || candidate.videoEmbed || youtubeEmbedUrl(candidate.url),
+      };
+    }
+  } catch (err) {
+    console.warn(`[scraper] article extraction failed for ${candidate.url}:`, err.message);
   }
+
+  return {
+    text: stripHtml(candidate.body),
+    imageUrl: candidate.imageUrl || "",
+    videoUrl: candidate.videoUrl || "",
+    videoEmbed: candidate.videoEmbed || youtubeEmbedUrl(candidate.url),
+  };
 }
 
 async function scrapeSource(source) {

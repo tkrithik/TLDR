@@ -24,6 +24,13 @@ function timeAgo(dateStr) {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
+function makeBlurb(text, max = 180) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim()
+  if (value.length <= max) return value
+  const cut = value.slice(0, max).replace(/\s+\S*$/, '')
+  return `${cut || value.slice(0, max)}…`
+}
+
 function ArticleCard({ article }) {
   const hasVideo = Boolean(article.videoUrl || article.videoEmbed)
   const source = article.isCombinedStory ? `${article.sourceCount || article.relatedSources?.length || 2} sources` : (article.sourceId?.name || '')
@@ -49,7 +56,7 @@ function ArticleCard({ article }) {
           <span className="feed-card-time">{timeAgo(article.publishedAt || article.scrapedAt)}</span>
         </div>
         <h2 className="feed-card-title">{article.title}</h2>
-        {article.summary && <p className="feed-card-summary">{article.summary}</p>}
+        {article.summary && <p className="feed-card-summary">{makeBlurb(article.summary)}</p>}
         {article.isCombinedStory && <p className="feed-card-combined">Combined coverage from multiple sources</p>}
       </div>
     </Link>
