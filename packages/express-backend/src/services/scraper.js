@@ -217,6 +217,16 @@ function isValidNewsSummary(summary) {
   return words.length >= 20 && uniqueWords.size >= 15 && sentenceCount >= 1;
 }
 
+
+function isLongEnoughGeneratedArticle(summary) {
+  const value = cleanText(summary);
+  if (!isValidNewsSummary(value)) return false;
+  const paragraphs = String(summary || "").split(/\n{2,}/).map((part) => cleanText(part)).filter((part) => part.split(/\s+/).length >= 20);
+  const words = value.split(/\s+/).filter(Boolean);
+  const sentences = value.split(/(?<=[.!?])\s+/).filter((part) => part.split(/\s+/).length >= 7);
+  return words.length >= 140 && (paragraphs.length >= 2 || sentences.length >= 5);
+}
+
 function findFirstUrl(text) {
   const match = String(text || "").match(/https?:\/\/[^\s"'<>]+/i);
   return match ? match[0] : "";
@@ -608,7 +618,7 @@ async function saveCandidatesForSource(source, candidates) {
     const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id title summary category categories tags videoUrl videoEmbed imageUrl publishedAt").lean();
     if (existingByUrl) {
       const updates = { title, category, categories, tags: categories };
-      if (!isValidNewsSummary(existingByUrl.summary || "")) updates.summary = summary;
+      if (!isLongEnoughGeneratedArticle(existingByUrl.summary || "")) updates.summary = summary;
       if (!existingByUrl.videoUrl && enriched.videoUrl) updates.videoUrl = enriched.videoUrl;
       if (!existingByUrl.videoEmbed && enriched.videoEmbed) updates.videoEmbed = enriched.videoEmbed;
       if (!existingByUrl.imageUrl && enriched.imageUrl) updates.imageUrl = enriched.imageUrl;

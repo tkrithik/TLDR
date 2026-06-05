@@ -268,7 +268,7 @@ const SUMMARY_BOILERPLATE_PATTERNS = [
 ];
 
 function hasUsefulSummary(value) {
-  const text = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const text = cleanSummaryText(value).replace(/\n+/g, " ").trim();
   // Display gate only: reject obvious garbage, but do not hide every article just
   // because the AI article is shorter than ideal or Anthropic is not configured.
   if (text.length < 120) return false;
@@ -283,7 +283,7 @@ function hasUsefulSummary(value) {
 
 
 function hasDisplayableArticle(value) {
-  const text = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const text = cleanSummaryText(value).replace(/\n+/g, " ").trim();
   if (text.length < 45) return false;
   if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
   const boilerplateHits = SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(text)).length;
@@ -297,12 +297,25 @@ function toSingleArticleStory(article) {
 function cleanSummaryText(value) {
   const raw = String(value || "")
     .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
   if (!raw) return "";
+  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(raw))) return "";
+
+  const explicitParagraphs = raw
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length >= 30)
+    .filter((paragraph) => !SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(paragraph)))
+    .filter((paragraph) => !SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(paragraph)));
+
+  if (explicitParagraphs.length >= 2) return explicitParagraphs.join("\n\n");
 
   const seen = new Set();
   const sentences = raw
+    .replace(/\n+/g, " ")
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length >= 30)
@@ -315,20 +328,18 @@ function cleanSummaryText(value) {
       return true;
     });
 
-  const cleaned = sentences.join(" ").trim();
-  if (cleaned) return cleaned;
-
-  // Last-resort display cleanup. Older saved articles may be valid but not split
-  // into normal sentences, or may contain one bad boilerplate phrase that caused
-  // the old cleaner to erase the whole card. Keep the article visible unless it
-  // is clearly one of the known non-news/alert pages.
-  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(raw))) return "";
-  let fallback = raw;
-  for (const pattern of SUMMARY_BOILERPLATE_PATTERNS) {
-    fallback = fallback.replace(pattern, " ");
+  if (sentences.length >= 4) {
+    const paragraphs = [];
+    for (let i = 0; i < sentences.length; i += 2) {
+      paragraphs.push(sentences.slice(i, i + 2).join(" "));
+    }
+    return paragraphs.join("\n\n").trim();
   }
+
+  let fallback = raw;
+  for (const pattern of SUMMARY_BOILERPLATE_PATTERNS) fallback = fallback.replace(pattern, " ");
   fallback = fallback.replace(/\s+/g, " ").trim();
-  return fallback.length >= 45 ? fallback : raw;
+  return fallback.length >= 45 ? fallback : "";
 }
 
 function trimSummary(value, maxLength = 420) {
