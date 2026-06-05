@@ -326,16 +326,23 @@ function displayArticleText(value) {
   return candidate;
 }
 
-function hasUsefulSummary(value) {
-  const text = displayArticleText(value).replace(/\n+/g, " ").trim();
-  if (text.length < 80) return false;
-  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+function isFullDisplayArticle(value) {
+  const text = displayArticleText(value);
+  const flat = text.replace(/\n+/g, " ").trim();
+  if (!flat) return false;
+  const words = flat.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
   const uniqueWords = new Set(words.filter((word) => word.length >= 4));
-  return words.length >= 20 && uniqueWords.size >= 15;
+  const paragraphs = text.split(/\n{2,}/).map((part) => part.trim()).filter((part) => part.split(/\s+/).length >= 18);
+  const sentences = flat.split(/(?<=[.!?])\s+/).filter((part) => part.split(/\s+/).length >= 7);
+  return words.length >= 180 && uniqueWords.size >= 60 && paragraphs.length >= 4 && sentences.length >= 6;
+}
+
+function hasUsefulSummary(value) {
+  return isFullDisplayArticle(value);
 }
 
 function hasDisplayableArticle(value) {
-  return displayArticleText(value).replace(/\n+/g, " ").trim().length >= 45;
+  return isFullDisplayArticle(value);
 }
 
 function toSingleArticleStory(article) {

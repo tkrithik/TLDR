@@ -3,7 +3,7 @@ import * as cheerio from "cheerio";
 import { Source } from "../models/Source.js";
 import { Article } from "../models/Article.js";
 import { hashContent, isDuplicate } from "./dedup.js";
-import { summarize } from "./summarize.js";
+import { summarize, isFullArticleText } from "./summarize.js";
 
 const MAX_ITEMS_PER_SOURCE = Number(process.env.MAX_ITEMS_PER_SOURCE ?? 30);
 const MIN_BODY_CHARS_FOR_SUMMARY = Number(process.env.MIN_BODY_CHARS_FOR_SUMMARY ?? 250);
@@ -219,12 +219,7 @@ function isValidNewsSummary(summary) {
 
 
 function isLongEnoughGeneratedArticle(summary) {
-  const value = cleanText(summary);
-  if (!isValidNewsSummary(value)) return false;
-  const paragraphs = String(summary || "").split(/\n{2,}/).map((part) => cleanText(part)).filter((part) => part.split(/\s+/).length >= 20);
-  const words = value.split(/\s+/).filter(Boolean);
-  const sentences = value.split(/(?<=[.!?])\s+/).filter((part) => part.split(/\s+/).length >= 7);
-  return words.length >= 140 && (paragraphs.length >= 2 || sentences.length >= 5);
+  return isFullArticleText(summary);
 }
 
 function findFirstUrl(text) {
@@ -602,14 +597,13 @@ async function saveCandidatesForSource(source, candidates) {
       console.warn(`[scraper] summarize failed for ${candidate.url}:`, err.message);
     }
 
-    if (!isValidNewsSummary(summary)) {
-      const fallbackSummary = cleanArticleText(enriched.text || candidate.body || "");
-      if (isValidNewsSummary(fallbackSummary)) {
-        summary = fallbackSummary.slice(0, 3000);
-      } else {
-        console.warn(`[scraper] skipped item with missing/invalid summary: ${candidate.url}`);
-        continue;
-      }
+    // Only save/display articles that have a real multi-paragraph generated body.
+    // RSS descriptions are fine as input to the model, but they should never be
+    // stored as the user-facing article text because that is what caused one-
+    // sentence summaries on the article page.
+    if (!isFullArticleText(summary)) {
+      console.warn(`[scraper] skipped item with missing/short generated article: ${candidate.url}`);
+      continue;
     }
 
     const categories = guessCategories(title, `${enriched.text} ${summary}`, candidate.tags || []);
