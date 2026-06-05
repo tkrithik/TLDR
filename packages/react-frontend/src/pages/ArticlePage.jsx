@@ -41,6 +41,21 @@ function hostFromUrl(value) {
   }
 }
 
+
+function articleCategories(article) {
+  const values = [article?.category, ...(Array.isArray(article?.categories) ? article.categories : []), ...(Array.isArray(article?.tags) ? article.tags : [])]
+  return [...new Set(values.map((value) => String(value || '').toLowerCase().trim()).filter((value) => value && value !== 'general' && value !== 'all'))]
+}
+
+function categoryLabel(value) {
+  return String(value || '')
+    .replace(/-/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
 function normalizeSources(article) {
   const related = Array.isArray(article.relatedSources) ? article.relatedSources : []
   const base = []
@@ -186,16 +201,18 @@ export default function ArticlePage() {
   const relatedSources = normalizeSources(article)
   const source = relatedSources[0] || article.sourceId
   const hasVideo = Boolean(article.videoUrl || article.videoEmbed)
+  const categories = articleCategories(article)
+  const primaryCategory = categories[0] || article.category
 
   return (
     <article className="article-page">
       <nav className="article-breadcrumb" aria-label="Breadcrumb">
         <Link to="/feed">Feed</Link>
-        {article.category && (
+        {primaryCategory && (
           <>
             <span aria-hidden="true"> / </span>
-            <Link to={`/feed?category=${article.category}`}>
-              {article.category.charAt(0).toUpperCase() + article.category.slice(1)}
+            <Link to={`/feed?category=${primaryCategory}`}>
+              {categoryLabel(primaryCategory)}
             </Link>
           </>
         )}
@@ -214,11 +231,11 @@ export default function ArticlePage() {
           <span className="muted">
             {timeAgo(article.publishedAt || article.scrapedAt)}
           </span>
-          {article.category && (
-            <Link to={`/feed?category=${article.category}`} className="cat-pill cat-pill--sm">
-              {article.category}
+          {categories.map((cat) => (
+            <Link key={cat} to={`/feed?category=${cat}`} className="cat-pill cat-pill--sm">
+              {categoryLabel(cat)}
             </Link>
-          )}
+          ))}
         </div>
 
         <h1 className="article-title">{article.title}</h1>
@@ -303,9 +320,9 @@ export default function ArticlePage() {
 
       <footer className="article-footer">
         <Link to="/feed" className="btn btn-ghost">← Back to feed</Link>
-        {article.category && (
-          <Link to={`/feed?category=${article.category}`} className="btn btn-ghost">
-            More {article.category} news
+        {primaryCategory && (
+          <Link to={`/feed?category=${primaryCategory}`} className="btn btn-ghost">
+            More {categoryLabel(primaryCategory)} news
           </Link>
         )}
       </footer>

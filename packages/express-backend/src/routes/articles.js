@@ -6,6 +6,73 @@ import { User } from "../models/User.js";
 
 export const articlesRouter = Router();
 
+const CATEGORY_ALIASES = {
+  all: "",
+  general: "",
+  tech: "technology",
+  technology: "technology",
+  sports: "sports",
+  sport: "sports",
+  politics: "politics",
+  political: "politics",
+  business: "business",
+  finance: "business",
+  money: "business",
+  economy: "business",
+  science: "science",
+  health: "science",
+  entertainment: "entertainment",
+  culture: "entertainment",
+  arts: "entertainment",
+  world: "world",
+  international: "world",
+  global: "world",
+};
+
+const CATEGORY_KEYWORDS = {
+  technology: ["tech", "technology", "software", "hardware", "ai", "artificial intelligence", "robot", "cyber", "data", "apple", "google", "microsoft", "openai", "startup", "app", "code", "developer", "bitcoin", "crypto", "semiconductor", "chip"],
+  sports: ["sport", "sports", "nba", "wnba", "nfl", "mlb", "nhl", "soccer", "football", "baseball", "tennis", "golf", "olympic", "league", "championship", "match", "game", "player", "team", "coach"],
+  politics: ["politic", "politics", "government", "election", "senate", "congress", "president", "democrat", "republican", "legislation", "vote", "lawmakers", "policy", "white house", "supreme court", "justice department", "campaign"],
+  business: ["business", "economy", "economic", "stock", "market", "finance", "bank", "invest", "revenue", "profit", "earnings", "startup", "ipo", "trade", "tariff", "gdp", "inflation", "federal reserve", "fed", "company", "ceo"],
+  science: ["science", "research", "study", "climate", "space", "nasa", "health", "medical", "medicine", "vaccine", "dna", "physics", "biology", "discovery", "scientists", "environment"],
+  entertainment: ["movie", "film", "music", "celebrity", "oscar", "grammy", "netflix", "spotify", "album", "concert", "theater", "tv", "television", "show", "actor", "actress", "streaming"],
+  world: ["world", "war", "conflict", "ukraine", "israel", "gaza", "hamas", "china", "russia", "iran", "nato", "united nations", "international", "foreign", "diplomat", "treaty", "europe", "asia", "africa", "middle east"],
+};
+
+function normalizeCategory(value) {
+  const raw = String(value || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+  if (!raw) return "";
+  if (Object.prototype.hasOwnProperty.call(CATEGORY_ALIASES, raw)) return CATEGORY_ALIASES[raw];
+  for (const [alias, category] of Object.entries(CATEGORY_ALIASES)) {
+    if (alias !== "all" && alias !== "general" && raw.includes(alias)) return category;
+  }
+  return raw;
+}
+
+function inferredCategories(article) {
+  const text = `${article?.title || ""} ${article?.summary || ""}`.toLowerCase();
+  return Object.entries(CATEGORY_KEYWORDS)
+    .map(([cat, keywords]) => {
+      let score = 0;
+      for (const kw of keywords) {
+        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i");
+        if (re.test(text)) score += kw.includes(" ") ? 2 : 1;
+      }
+      return [cat, score];
+    })
+    .filter(([, score]) => score >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([cat]) => cat);
+}
+
+function articleCategorySet(article) {
+  const values = [article.category, ...(Array.isArray(article.categories) ? article.categories : []), ...(Array.isArray(article.tags) ? article.tags : [])];
+  const normalized = values.map(normalizeCategory).filter(Boolean);
+  return [...new Set([...normalized, ...inferredCategories(article)])];
+}
+
 const STOP_WORDS = new Set([
   "the", "and", "for", "with", "from", "that", "this", "are", "was", "were", "will", "has", "have", "had", "not", "but", "you", "your", "their", "they", "his", "her", "its", "about", "after", "before", "over", "under", "into", "than", "then", "when", "what", "who", "why", "how", "new", "news", "says", "said", "live", "video", "photos", "update", "updates", "latest",
 ]);
@@ -306,13 +373,19 @@ function toStory(group) {
 
   return {
     ...primary,
-    _id: makeStoryId(articles),
+    // Single raw articles must keep their Mongo _id so clicking a feed card opens
+    // /api/articles/:id successfully. Only true multi-source combined stories get
+    // synthetic story_ ids.
+    _id: articles.length > 1 ? makeStoryId(articles) : primary._id.toString(),
     isCombinedStory: articles.length > 1,
     sourceCount: allSources.length || 1,
     relatedArticleIds: articles.map((article) => article._id.toString()),
     relatedSources: allSources,
     title: primary.title,
     url: primary.url,
+    category: articleCategorySet(primary)[0] || primary.category || "general",
+    categories: [...new Set(articles.flatMap(articleCategorySet))],
+    tags: [...new Set(articles.flatMap(articleCategorySet))],
     summary: combinedSummary(articles),
     blurb: makeBlurb(combinedSummary(articles)),
     imageUrl: withImage?.imageUrl || primary.imageUrl || "",
@@ -358,35 +431,39 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
     if (req.query.sourceId && mongoose.isValidObjectId(req.query.sourceId)) {
       query.sourceId = req.query.sourceId;
     }
-    const requestedCategory = String(req.query.category || "").trim().toLowerCase();
-    // Treat "All"/"general" as no category filter. The frontend used to render
-    // two All pills: one empty category and one "general" category from MongoDB.
-    // Clicking the second one made /api/articles?category=general, which hid every
-    // politics/business/world/etc. article and made the All feed look tiny.
-    if (requestedCategory && requestedCategory !== "all" && requestedCategory !== "general") {
-      query.category = requestedCategory;
-    }
+    const requestedCategory = normalizeCategory(req.query.category || "");
+    // Category filtering is applied after fetch using stored tags plus inferred
+    // categories from title/summary, so old miscategorized articles can still show
+    // under the right topic.
     if (req.query.q) {
       const re = new RegExp(escapeRegExp(req.query.q), "i");
-      query.$or = [{ title: re }, { summary: re }];
+      const searchOr = [{ title: re }, { summary: re }];
+      if (query.$or) query.$and = [{ $or: query.$or }, { $or: searchOr }];
+      else query.$or = searchOr;
     } else {
       query.summary = { $exists: true, $nin: ["", null] };
     }
     if (req.query.hasVideo === "true") {
-      query.$or = [
+      const videoOr = [
         { videoUrl: { $ne: "" } },
         { videoEmbed: { $ne: "" } },
       ];
+      if (query.$or) query.$and = [...(query.$and || []), { $or: query.$or }, { $or: videoOr }], delete query.$or;
+      else query.$or = videoOr;
     }
 
     const isAllFeed = !requestedCategory && !req.query.sourceId && !req.query.q && req.query.hasVideo !== "true";
     const rawLimit = isAllFeed ? 3000 : Math.min(parsePositiveInt(req.query.rawLimit, 1500), 3000);
 
-    const rawItems = await Article.find(query)
+    let rawItems = await Article.find(query)
       .sort({ publishedAt: -1, scrapedAt: -1, createdAt: -1 })
       .limit(rawLimit)
       .populate("sourceId", "name url")
       .lean();
+
+    if (requestedCategory) {
+      rawItems = rawItems.filter((article) => articleCategorySet(article).includes(requestedCategory));
+    }
 
     let visibleItems;
 
@@ -424,11 +501,13 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
 // GET /api/articles/categories — distinct category list
 articlesRouter.get("/categories", async (_req, res) => {
   try {
-    const cats = await Article.distinct("category");
-    // Do not return general as a separate category pill; the blank category already
-    // means All and includes general plus every topical category.
-    const categories = cats
-      .map((cat) => String(cat || "").trim().toLowerCase())
+    const [primaryCats, secondaryCats, tagCats] = await Promise.all([
+      Article.distinct("category"),
+      Article.distinct("categories"),
+      Article.distinct("tags"),
+    ]);
+    const categories = [...Object.keys(CATEGORY_KEYWORDS), ...primaryCats, ...secondaryCats, ...tagCats]
+      .map(normalizeCategory)
       .filter((cat) => cat && cat !== "general" && cat !== "all")
       .filter((cat, index, arr) => arr.indexOf(cat) === index)
       .sort();
@@ -447,7 +526,7 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
         .sort({ publishedAt: -1, scrapedAt: -1, createdAt: -1 })
         .populate("sourceId", "name url")
         .lean();
-      const usefulDocs = docs.filter((article) => hasUsefulTitle(article.title) && hasUsefulSummary(article.summary));
+      const usefulDocs = docs.filter((article) => hasUsefulTitle(article.title) && hasDisplayableArticle(article.summary));
       if (usefulDocs.length === 0) return res.status(404).json({ error: "Story not found" });
       return res.json(toStory({ articles: usefulDocs }));
     }
@@ -458,7 +537,7 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
     const doc = await Article.findById(req.params.id)
       .populate("sourceId", "name url")
       .lean();
-    if (!doc || !hasUsefulTitle(doc.title) || !hasUsefulSummary(doc.summary)) return res.status(404).json({ error: "Article not found" });
+    if (!doc || !hasUsefulTitle(doc.title) || !hasDisplayableArticle(doc.summary)) return res.status(404).json({ error: "Article not found" });
 
     let bookmarked = false;
     if (req.user) {

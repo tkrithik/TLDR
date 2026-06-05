@@ -15,6 +15,8 @@ const articleSchema = new mongoose.Schema(
     videoUrl: { type: String, default: "" },      // YouTube / direct MP4 URL
     videoEmbed: { type: String, default: "" },    // embed iframe src
     category: { type: String, default: "general", index: true },
+    categories: [{ type: String, index: true }],
+    tags: [{ type: String, index: true }],
     publishedAt: { type: Date, default: null },
     scrapedAt: { type: Date, default: () => new Date() },
   },
@@ -23,5 +25,7 @@ const articleSchema = new mongoose.Schema(
 
 articleSchema.index({ sourceId: 1, publishedAt: -1, createdAt: -1 });
 articleSchema.index({ category: 1, publishedAt: -1 });
+articleSchema.index({ categories: 1, publishedAt: -1 });
+articleSchema.index({ tags: 1, publishedAt: -1 });
 
 export const Article = mongoose.model("Article", articleSchema);

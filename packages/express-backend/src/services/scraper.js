@@ -9,26 +9,81 @@ const MAX_ITEMS_PER_SOURCE = Number(process.env.MAX_ITEMS_PER_SOURCE ?? 30);
 const MIN_BODY_CHARS_FOR_SUMMARY = Number(process.env.MIN_BODY_CHARS_FOR_SUMMARY ?? 250);
 const REQUEST_TIMEOUT_MS = Number(process.env.SCRAPER_REQUEST_TIMEOUT_MS ?? 15000);
 
-// Category keywords map
+// Category keywords map. Articles can belong to multiple categories; the first
+// category is stored in `category` for older code, and the full set is stored in
+// `categories`/`tags` for filtering.
 const CATEGORY_KEYWORDS = {
-  technology: ["tech", "software", "hardware", "ai", "robot", "cyber", "data", "apple", "google", "microsoft", "openai", "startup", "app", "code", "developer", "bitcoin", "crypto"],
-  sports: ["sport", "nba", "nfl", "soccer", "football", "baseball", "tennis", "golf", "olympic", "league", "championship", "match", "game", "player", "team"],
-  politics: ["politic", "government", "election", "senate", "congress", "president", "democrat", "republican", "legislation", "vote", "law", "policy", "white house"],
-  business: ["business", "economy", "stock", "market", "finance", "bank", "invest", "revenue", "profit", "startup", "ipo", "trade", "gdp", "inflation"],
-  science: ["science", "research", "study", "climate", "space", "nasa", "health", "medical", "vaccine", "dna", "physics", "biology", "discovery"],
-  entertainment: ["movie", "film", "music", "celebrity", "oscar", "grammy", "netflix", "spotify", "album", "concert", "theater", "tv", "show", "actor"],
-  world: ["war", "conflict", "ukraine", "israel", "china", "russia", "nato", "un ", "international", "foreign", "diplomat", "treaty"],
+  technology: ["tech", "technology", "software", "hardware", "ai", "artificial intelligence", "robot", "cyber", "data", "apple", "google", "microsoft", "openai", "startup", "app", "code", "developer", "bitcoin", "crypto", "semiconductor", "chip"],
+  sports: ["sport", "sports", "nba", "wnba", "nfl", "mlb", "nhl", "soccer", "football", "baseball", "tennis", "golf", "olympic", "league", "championship", "match", "game", "player", "team", "coach"],
+  politics: ["politic", "politics", "government", "election", "senate", "congress", "president", "democrat", "republican", "legislation", "vote", "lawmakers", "policy", "white house", "supreme court", "justice department", "campaign"],
+  business: ["business", "economy", "economic", "stock", "market", "finance", "bank", "invest", "revenue", "profit", "earnings", "startup", "ipo", "trade", "tariff", "gdp", "inflation", "federal reserve", "fed", "company", "ceo"],
+  science: ["science", "research", "study", "climate", "space", "nasa", "health", "medical", "medicine", "vaccine", "dna", "physics", "biology", "discovery", "scientists", "environment"],
+  entertainment: ["movie", "film", "music", "celebrity", "oscar", "grammy", "netflix", "spotify", "album", "concert", "theater", "tv", "television", "show", "actor", "actress", "streaming"],
+  world: ["world", "war", "conflict", "ukraine", "israel", "gaza", "hamas", "china", "russia", "iran", "nato", "united nations", "international", "foreign", "diplomat", "treaty", "europe", "asia", "africa", "middle east"],
 };
 
-function guessCategory(title, body = "") {
-  const text = `${title} ${body}`.toLowerCase();
-  let best = "general";
-  let bestScore = 0;
-  for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-    const score = keywords.reduce((n, kw) => n + (text.includes(kw) ? 1 : 0), 0);
-    if (score > bestScore) { bestScore = score; best = cat; }
+const CATEGORY_ALIASES = {
+  tech: "technology",
+  technology: "technology",
+  sports: "sports",
+  sport: "sports",
+  politics: "politics",
+  political: "politics",
+  business: "business",
+  finance: "business",
+  money: "business",
+  economy: "business",
+  science: "science",
+  health: "science",
+  entertainment: "entertainment",
+  culture: "entertainment",
+  arts: "entertainment",
+  world: "world",
+  international: "world",
+  global: "world",
+};
+
+function normalizeCategory(value) {
+  const raw = String(value || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+  if (!raw) return "";
+  if (CATEGORY_ALIASES[raw]) return CATEGORY_ALIASES[raw];
+  for (const [alias, category] of Object.entries(CATEGORY_ALIASES)) {
+    if (raw.includes(alias)) return category;
   }
-  return best;
+  return "";
+}
+
+function guessCategories(title, body = "", explicit = []) {
+  const found = new Set();
+  for (const value of explicit || []) {
+    const normalized = normalizeCategory(value);
+    if (normalized) found.add(normalized);
+  }
+
+  const text = `${title} ${body}`.toLowerCase();
+  const scored = Object.entries(CATEGORY_KEYWORDS)
+    .map(([cat, keywords]) => {
+      let score = 0;
+      for (const kw of keywords) {
+        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i");
+        if (re.test(text)) score += kw.includes(" ") ? 2 : 1;
+      }
+      return [cat, score];
+    })
+    .filter(([, score]) => score > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  for (const [cat, score] of scored) {
+    if (score >= 2 || found.size === 0) found.add(cat);
+    if (found.size >= 3) break;
+  }
+
+  return [...found].length > 0 ? [...found] : ["general"];
+}
+
+function guessCategory(title, body = "", explicit = []) {
+  return guessCategories(title, body, explicit)[0] || "general";
 }
 
 function toAbsoluteUrl(baseUrl, maybeUrl) {
@@ -294,6 +349,11 @@ function parseRss(url, body) {
       cleanText($(el).find("pubDate").first().text()) ||
       cleanText($(el).find("updated").first().text()) ||
       cleanText($(el).find("published").first().text());
+    const rssCategories = [];
+    $(el).find("category, media\:category").each((_i, catEl) => {
+      const value = cleanText($(catEl).text() || $(catEl).attr("label") || $(catEl).attr("term"));
+      if (value) rssCategories.push(value);
+    });
     const imageRaw =
       $(el).find("media\\:thumbnail").attr("url") ||
       $(el).find("enclosure[type^='image']").attr("url") ||
@@ -317,6 +377,7 @@ function parseRss(url, body) {
       imageUrl: imageRaw ? (toAbsoluteUrl(url, imageRaw) || imageRaw) : "",
       videoUrl: videoAbs && isVideoUrl(videoAbs) ? videoAbs : "",
       videoEmbed: youtubeEmbedUrl(videoAbs || link || description || contentEncoded),
+      tags: rssCategories,
     });
   });
   return items;
@@ -553,7 +614,8 @@ async function saveCandidatesForSource(source, candidates) {
       }
     }
 
-    const category = guessCategory(title, enriched.text);
+    const categories = guessCategories(title, enriched.text, candidate.tags || []);
+    const category = categories[0] || "general";
 
     await Article.create({
       sourceId: source._id,
@@ -565,6 +627,8 @@ async function saveCandidatesForSource(source, candidates) {
       videoUrl: enriched.videoUrl || "",
       videoEmbed: enriched.videoEmbed || "",
       category,
+      categories,
+      tags: categories,
       publishedAt: candidate.publishedAt instanceof Date && !Number.isNaN(candidate.publishedAt.valueOf())
         ? candidate.publishedAt : null,
       scrapedAt: new Date(),
