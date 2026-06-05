@@ -685,16 +685,20 @@ export async function scrapeAllSources() {
   }
   let discovered = 0, saved = 0, duplicates = 0, repaired = 0, failedSources = 0;
 
-  for (const source of sources) {
-    try {
-      const result = await scrapeOneSource(source);
-      discovered += result.discovered;
-      saved += result.saved;
-      duplicates += result.duplicates;
-      repaired += result.repaired || 0;
-    } catch (err) {
-      failedSources++;
-      console.error(`[scraper] failed source ${source.url}`, err.message);
+  const CONCURRENCY = Number(process.env.SCRAPER_CONCURRENCY ?? 5);
+  for (let i = 0; i < sources.length; i += CONCURRENCY) {
+    const batch = sources.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(batch.map((s) => scrapeOneSource(s)));
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        discovered += r.value.discovered;
+        saved += r.value.saved;
+        duplicates += r.value.duplicates;
+        repaired += r.value.repaired || 0;
+      } else {
+        failedSources++;
+        console.error(`[scraper] failed source`, r.reason?.message);
+      }
     }
   }
   return { sources: sources.length, discovered, saved, duplicates, repaired, failedSources };
