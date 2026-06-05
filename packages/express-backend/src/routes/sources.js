@@ -2,6 +2,7 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { Source } from "../models/Source.js";
 import { scrapeOneSource } from "../services/scraper.js";
+import { ensureDefaultSources } from "../services/defaultSources.js";
 
 export const sourcesRouter = Router();
 
@@ -19,6 +20,7 @@ function parsePositiveInt(value, fallback) {
 
 sourcesRouter.get("/", async (req, res) => {
   try {
+    await ensureDefaultSources();
     const page = parsePositiveInt(req.query.page, 1);
     const limit = Math.min(parsePositiveInt(req.query.limit, 8), 100);
     const skip = (page - 1) * limit;

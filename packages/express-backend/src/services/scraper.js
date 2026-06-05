@@ -1,6 +1,7 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import { Source } from "../models/Source.js";
+import { ensureDefaultSources } from "./defaultSources.js";
 import { Article } from "../models/Article.js";
 import { hashContent, isDuplicate } from "./dedup.js";
 import { summarize, isFullArticleText } from "./summarize.js";
@@ -673,7 +674,15 @@ export async function scrapeOneSource(source) {
  * Scrapes all active sources and persists new deduplicated articles.
  */
 export async function scrapeAllSources() {
-  const sources = await Source.find({ active: true }).lean();
+  await ensureDefaultSources();
+  let sources = await Source.find({ active: true }).lean();
+
+  // If every source was accidentally toggled inactive, scrape all known sources
+  // instead of returning zero and leaving the feed stuck.
+  if (sources.length === 0) {
+    await Source.updateMany({}, { $set: { active: true } });
+    sources = await Source.find({ active: true }).lean();
+  }
   let discovered = 0, saved = 0, duplicates = 0, repaired = 0, failedSources = 0;
 
   for (const source of sources) {
