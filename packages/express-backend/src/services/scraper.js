@@ -103,7 +103,7 @@ function stripHtml(value) {
   return cleanText($.text());
 }
 
-const NON_ARTICLE_URL_PATTERN = /\/(?:alerts?|newsletter|newsletters|topics?|section|sections|category|categories|tag|author|authors|search|privacy|terms|about|contact|video|videos|live)(?:\/|$)|[?&](?:output|view)=|\.(?:jpg|jpeg|png|gif|webp|mp4|pdf)(?:[?#]|$)/i;
+const NON_ARTICLE_URL_PATTERN = /\/(?:alerts?|newsletter|newsletters|topics?|section|sections|category|categories|tag|author|authors|search|privacy|terms|about|contact|live)(?:\/|$)|[?&](?:output|view)=|\.(?:jpg|jpeg|png|gif|webp|mp4|pdf)(?:[?#]|$)/i;
 
 
 const BAD_TITLE_PATTERNS = [

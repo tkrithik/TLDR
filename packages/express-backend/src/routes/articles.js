@@ -105,7 +105,7 @@ function storyTokens(...parts) {
 }
 
 function articleTokens(article) {
-  return storyTokens(article.title, article.summary);
+  return storyTokens(article.title);
 }
 
 function jaccard(aTokens, bTokens) {
@@ -138,9 +138,10 @@ function areSameStory(article, group) {
   const tokenSet = new Set(tokens);
   const shared = group.tokens.filter((token) => tokenSet.has(token));
 
-  // Require meaningful overlap so only genuinely related coverage gets combined.
-  if (score >= 0.22) return true;
-  if (shared.length >= 3 && score >= 0.14) return true;
+  // Match on title tokens only — summaries are AI-rewritten so their vocabulary diverges.
+  // Titles share key nouns (names, places, events) even across outlets.
+  if (score >= 0.18) return true;
+  if (shared.length >= 2 && score >= 0.10) return true;
 
   return false;
 }
