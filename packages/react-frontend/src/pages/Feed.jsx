@@ -4,7 +4,7 @@ import { fetchArticles, fetchCategories, triggerScrape } from '../api/articles.j
 import { useAuth } from '../context/AuthContext.jsx'
 
 const CATEGORY_LABELS = {
-  general: 'All',
+  general: 'General',
   technology: 'Technology',
   sports: 'Sports',
   politics: 'Politics',
@@ -133,7 +133,8 @@ export default function Feed() {
 
   function setParam(key, value) {
     const p = new URLSearchParams(searchParams)
-    if (value) p.set(key, value)
+    const normalizedValue = (key === 'category' && (value === 'general' || value === 'all')) ? '' : value
+    if (normalizedValue) p.set(key, normalizedValue)
     else p.delete(key)
     p.delete('page')
     setSearchParams(p)
@@ -164,14 +165,14 @@ export default function Feed() {
     setParam('q', searchRef.current?.value || '')
   }
 
-  const allCats = ['', ...categories]
+  const allCats = ['', ...categories.filter((cat) => cat && cat !== 'general' && cat !== 'all')]
 
   return (
     <div className="feed-page">
       {/* Top bar */}
       <div className="feed-header">
         <h1 className="feed-title">
-          {q ? `Search: "${q}"` : category ? (CATEGORY_LABELS[category] || category) : 'Latest News'}
+          {q ? `Search: "${q}"` : category ? (CATEGORY_LABELS[category] || category) : 'All News'}
         </h1>
         <div className="feed-actions">
           <form onSubmit={handleSearch} className="feed-search-form">

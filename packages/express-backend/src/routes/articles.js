@@ -345,8 +345,13 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
     if (req.query.sourceId && mongoose.isValidObjectId(req.query.sourceId)) {
       query.sourceId = req.query.sourceId;
     }
-    if (req.query.category) {
-      query.category = req.query.category;
+    const requestedCategory = String(req.query.category || "").trim().toLowerCase();
+    // Treat "All"/"general" as no category filter. The frontend used to render
+    // two All pills: one empty category and one "general" category from MongoDB.
+    // Clicking the second one made /api/articles?category=general, which hid every
+    // politics/business/world/etc. article and made the All feed look tiny.
+    if (requestedCategory && requestedCategory !== "all" && requestedCategory !== "general") {
+      query.category = requestedCategory;
     }
     if (req.query.q) {
       const re = new RegExp(escapeRegExp(req.query.q), "i");
@@ -393,7 +398,14 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
 articlesRouter.get("/categories", async (_req, res) => {
   try {
     const cats = await Article.distinct("category");
-    res.json({ categories: cats.sort() });
+    // Do not return general as a separate category pill; the blank category already
+    // means All and includes general plus every topical category.
+    const categories = cats
+      .map((cat) => String(cat || "").trim().toLowerCase())
+      .filter((cat) => cat && cat !== "general" && cat !== "all")
+      .filter((cat, index, arr) => arr.indexOf(cat) === index)
+      .sort();
+    res.json({ categories });
   } catch (err) {
     res.status(500).json({ error: "Failed to list categories" });
   }
