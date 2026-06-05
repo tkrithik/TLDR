@@ -138,12 +138,9 @@ function areSameStory(article, group) {
   const tokenSet = new Set(tokens);
   const shared = group.tokens.filter((token) => tokenSet.has(token));
 
-  // Keep grouping useful without collapsing the entire feed. The old thresholds
-  // (0.18 Jaccard or two shared tokens) merged unrelated political/world articles
-  // into a few giant stories, which made All show only a handful of cards. Require
-  // stronger overlap so only genuinely similar coverage becomes one synthesized story.
-  if (score >= 0.34) return true;
-  if (shared.length >= 4 && score >= 0.22) return true;
+  // Require meaningful overlap so only genuinely related coverage gets combined.
+  if (score >= 0.22) return true;
+  if (shared.length >= 3 && score >= 0.14) return true;
 
   return false;
 }
@@ -514,13 +511,12 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
     let visibleItems;
 
     if (isAllFeed) {
-      // The All feed should be a broad firehose across every category. Do not run
-      // same-story grouping here, because even stricter grouping can still collapse
-      // the home feed into only a few cards when several outlets cover the same
-      // major topic. Topic/search feeds may still use grouping.
-      visibleItems = rawItems
-        .filter((item) => hasUsefulTitle(item.title) && hasDisplayableArticle(item.summary))
-        .map(toSingleArticleStory);
+      visibleItems = groupArticles(rawItems).filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary));
+      if (visibleItems.length === 0) {
+        visibleItems = rawItems
+          .filter((item) => hasUsefulTitle(item.title) && hasDisplayableArticle(item.summary))
+          .map(toSingleArticleStory);
+      }
     } else {
       const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary));
 
