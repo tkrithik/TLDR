@@ -209,6 +209,19 @@ function hasUsefulSummary(value) {
   return words.length >= 35 && uniqueWords.size >= 25 && sentenceCount >= 1;
 }
 
+
+function hasDisplayableArticle(value) {
+  const text = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  if (text.length < 45) return false;
+  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  const boilerplateHits = SUMMARY_BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(text)).length;
+  return boilerplateHits < 2;
+}
+
+function toSingleArticleStory(article) {
+  return toStory({ articles: [article] });
+}
+
 function cleanSummaryText(value) {
   const seen = new Set();
   const sentences = String(value || "")
@@ -366,22 +379,36 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
       ];
     }
 
+    const isAllFeed = !requestedCategory && !req.query.sourceId && !req.query.q && req.query.hasVideo !== "true";
+    const rawLimit = isAllFeed ? 3000 : Math.min(parsePositiveInt(req.query.rawLimit, 1500), 3000);
+
     const rawItems = await Article.find(query)
       .sort({ publishedAt: -1, scrapedAt: -1, createdAt: -1 })
-      .limit(Math.min(parsePositiveInt(req.query.rawLimit, 1500), 3000))
+      .limit(rawLimit)
       .populate("sourceId", "name url")
       .lean();
 
-    const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary));
+    let visibleItems;
 
-    // If grouping/quality gates somehow remove everything, fall back to clean raw
-    // articles instead of returning an empty feed. This prevents the UI from saying
-    // "No articles yet" when MongoDB actually has usable articles.
-    const visibleItems = groupedItems.length > 0
-      ? groupedItems
-      : rawItems
-          .filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary))
-          .map((article) => toStory({ articles: [article] }));
+    if (isAllFeed) {
+      // The All feed should be a broad firehose across every category. Do not run
+      // same-story grouping here, because even stricter grouping can still collapse
+      // the home feed into only a few cards when several outlets cover the same
+      // major topic. Topic/search feeds may still use grouping.
+      visibleItems = rawItems
+        .filter((item) => hasUsefulTitle(item.title) && hasDisplayableArticle(item.summary))
+        .map(toSingleArticleStory);
+    } else {
+      const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulTitle(item.title) && hasUsefulSummary(item.summary));
+
+      // If grouping/quality gates remove too much, fall back to clean raw articles.
+      visibleItems = groupedItems.length > 0
+        ? groupedItems
+        : rawItems
+            .filter((item) => hasUsefulTitle(item.title) && hasDisplayableArticle(item.summary))
+            .map(toSingleArticleStory);
+    }
+
     const total = visibleItems.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const skip = (page - 1) * limit;

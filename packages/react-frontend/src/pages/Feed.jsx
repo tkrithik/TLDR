@@ -107,7 +107,7 @@ export default function Feed() {
     try {
       const data = await fetchArticles({
         page,
-        limit: 24,
+        limit: 48,
         category: category || undefined,
         q: q || undefined,
         hasVideo: hasVideo || undefined,
