@@ -12,11 +12,11 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 export async function summarize(text) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    // Graceful degradation: return a truncated excerpt
+    // Graceful degradation: return a cleaned excerpt only when it is real article text.
     return text.slice(0, 280).trim() + (text.length > 280 ? "…" : "");
   }
 
-  const prompt = `Summarize the following news article in exactly 2-4 concise sentences. Use plain text only, no markdown, no bullet points, no headers. Be factual and direct. Focus only on the central news event, key people/organizations, actions, consequences, and important context. Ignore boilerplate such as copyright notices, app download prompts, newsletters, navigation text, related links, ads, cookie notices, and source branding. If the input appears to contain boilerplate, do not mention it.\n\n${text.slice(0, 8000)}`;
+  const prompt = `Summarize the following news article in exactly 2-4 concise sentences. Use plain text only, no markdown, no bullet points, no headers. Be factual and direct. Focus only on the central news event, key people/organizations, actions, consequences, and important context. Ignore boilerplate such as copyright notices, app download prompts, newsletters, navigation text, related links, ads, cookie notices, and source branding. If the input is mostly alerts, newsletter/category-page copy, copyright/app prompts, or other boilerplate instead of a real article, return an empty string. Do not mention boilerplate.\n\n${text.slice(0, 8000)}`;
 
   try {
     const res = await fetch(ANTHROPIC_API_URL, {
@@ -36,7 +36,7 @@ export async function summarize(text) {
     if (!res.ok) {
       const err = await res.text();
       console.warn("[summarize] Anthropic API error:", res.status, err);
-      return text.slice(0, 280).trim() + "…";
+      return text.slice(0, 280).trim() + (text.length > 280 ? "…" : "");
     }
 
     const data = await res.json();

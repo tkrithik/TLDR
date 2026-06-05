@@ -92,6 +92,15 @@ function sourceUrl(article) {
   return article.sourceId?.url || article.url;
 }
 
+const SUMMARY_NON_NEWS_PATTERNS = [
+  /news alerts? there are no new alerts at this time/i,
+  /highlights of .* in-depth, investigative, and interactive reporting/i,
+  /top stories on .* culture and politics/i,
+  /top trending stories to stay in the know/i,
+  /there are no new alerts/i,
+  /manage alerts|breaking news alerts|email newsletters/i,
+];
+
 const SUMMARY_BOILERPLATE_PATTERNS = [
   /©\s*\d{4}/i,
   /all rights reserved/i,
@@ -110,6 +119,16 @@ const SUMMARY_BOILERPLATE_PATTERNS = [
   /advertisement/i,
 ];
 
+function hasUsefulSummary(value) {
+  const text = String(value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  if (text.length < 80) return false;
+  if (SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  if (SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(text))) return false;
+  const words = text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
+  const uniqueWords = new Set(words.filter((word) => word.length >= 4));
+  return words.length >= 18 && uniqueWords.size >= 14;
+}
+
 function cleanSummaryText(value) {
   const seen = new Set();
   const sentences = String(value || "")
@@ -119,6 +138,7 @@ function cleanSummaryText(value) {
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
     .filter((sentence) => sentence.length >= 30)
+    .filter((sentence) => !SUMMARY_NON_NEWS_PATTERNS.some((pattern) => pattern.test(sentence)))
     .filter((sentence) => !SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(sentence)))
     .filter((sentence) => {
       const key = sentence.toLowerCase();
@@ -196,6 +216,7 @@ function toStory(group) {
 function groupArticles(articles) {
   const groups = [];
   for (const article of articles) {
+    if (!hasUsefulSummary(article.summary)) continue;
     const match = groups.find((group) => areSameStory(article, group));
     if (match) {
       match.articles.push(article);
@@ -232,6 +253,8 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
     if (req.query.q) {
       const re = new RegExp(escapeRegExp(req.query.q), "i");
       query.$or = [{ title: re }, { summary: re }];
+    } else {
+      query.summary = { $exists: true, $nin: ["", null] };
     }
     if (req.query.hasVideo === "true") {
       query.$or = [
@@ -246,7 +269,7 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
       .populate("sourceId", "name url")
       .lean();
 
-    const groupedItems = groupArticles(rawItems);
+    const groupedItems = groupArticles(rawItems).filter((item) => hasUsefulSummary(item.summary));
     const total = groupedItems.length;
     const pages = Math.max(1, Math.ceil(total / limit));
     const skip = (page - 1) * limit;
@@ -278,8 +301,9 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
         .sort({ publishedAt: -1, scrapedAt: -1, createdAt: -1 })
         .populate("sourceId", "name url")
         .lean();
-      if (docs.length === 0) return res.status(404).json({ error: "Story not found" });
-      return res.json(toStory({ articles: docs }));
+      const usefulDocs = docs.filter((article) => hasUsefulSummary(article.summary));
+      if (usefulDocs.length === 0) return res.status(404).json({ error: "Story not found" });
+      return res.json(toStory({ articles: usefulDocs }));
     }
 
     if (!mongoose.isValidObjectId(req.params.id)) {
@@ -288,7 +312,7 @@ articlesRouter.get("/:id", optionalAuth, async (req, res) => {
     const doc = await Article.findById(req.params.id)
       .populate("sourceId", "name url")
       .lean();
-    if (!doc) return res.status(404).json({ error: "Article not found" });
+    if (!doc || !hasUsefulSummary(doc.summary)) return res.status(404).json({ error: "Article not found" });
 
     let bookmarked = false;
     if (req.user) {

@@ -47,6 +47,8 @@ function stripHtml(value) {
   return cleanText($.text());
 }
 
+const NON_ARTICLE_URL_PATTERN = /\/(?:alerts?|newsletter|newsletters|topics?|section|sections|category|categories|tag|author|authors|search|privacy|terms|about|contact|video|videos|live)(?:\/|$)|[?&](?:output|view)=|\.(?:jpg|jpeg|png|gif|webp|mp4|pdf)(?:[?#]|$)/i;
+
 const BOILERPLATE_PATTERNS = [
   /^(advertisement|subscribe|sign up|log in|login|share|follow us|read more|related|cookie|privacy|terms|all rights reserved)$/i,
   /©\s*\d{4}/i,
@@ -92,6 +94,39 @@ function cleanArticleText(text) {
       return true;
     });
   return cleanText(sentences.join(" "));
+}
+
+
+const NON_NEWS_PATTERNS = [
+  /news alerts? there are no new alerts at this time/i,
+  /highlights of .* in-depth, investigative, and interactive reporting/i,
+  /top stories on .* culture and politics/i,
+  /top trending stories to stay in the know/i,
+  /there are no new alerts/i,
+  /manage alerts|breaking news alerts|email newsletters/i,
+  /download the .* app|scan the qr code/i,
+  /all rights reserved|privacy policy|terms of service/i,
+];
+
+function hasEnoughNewsSignals(text) {
+  const value = cleanText(text);
+  if (value.length < MIN_BODY_CHARS_FOR_SUMMARY) return false;
+  if (NON_NEWS_PATTERNS.some((pattern) => pattern.test(value))) return false;
+  const sentences = value.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 9);
+  if (sentences.length < 2) return false;
+  const boilerplateHits = BOILERPLATE_PATTERNS.filter((pattern) => pattern.test(value)).length;
+  if (boilerplateHits >= 2) return false;
+  const uniqueWords = new Set(value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((word) => word.length >= 4));
+  return uniqueWords.size >= 35;
+}
+
+function isValidNewsSummary(summary) {
+  const value = cleanText(summary);
+  if (value.length < 80) return false;
+  if (NON_NEWS_PATTERNS.some((pattern) => pattern.test(value))) return false;
+  if (BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value))) return false;
+  const sentences = value.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.split(/\s+/).length >= 7);
+  return sentences.length >= 1;
 }
 
 function findFirstUrl(text) {
@@ -238,6 +273,7 @@ function parseRss(url, body) {
       findFirstUrl($(el).find("link[rel='enclosure']").attr("href") || "") || "";
     const link = toAbsoluteUrl(url, linkRaw);
     if (!title || !link) return;
+    if (NON_ARTICLE_URL_PATTERN.test(link)) return;
     const videoAbs = videoRaw ? (toAbsoluteUrl(url, videoRaw) || videoRaw) : "";
     items.push({
       title,
@@ -263,6 +299,7 @@ function parseHtml(url, body) {
     const link = toAbsoluteUrl(url, href);
     if (!title || title.length < 15 || !link) return;
     if (!/^https?:\/\//i.test(link)) return;
+    if (NON_ARTICLE_URL_PATTERN.test(link)) return;
     if (seen.has(link)) return;
     seen.add(link);
     items.push({ title, url: link, body: title, publishedAt: null, imageUrl: "", videoUrl: "", videoEmbed: youtubeEmbedUrl(link) });
@@ -412,6 +449,10 @@ async function saveCandidatesForSource(source, candidates) {
 
   for (const candidate of candidates) {
     const enriched = await enrichCandidate(candidate);
+    if (!hasEnoughNewsSignals(enriched.text)) {
+      console.warn(`[scraper] skipped non-article or boilerplate-only item: ${candidate.url}`);
+      continue;
+    }
     const digest = hashContent(`${candidate.title}\n${enriched.text}`);
     const existingByUrl = await Article.findOne({ url: candidate.url }).select("_id videoUrl videoEmbed imageUrl").lean();
     if (existingByUrl) {
@@ -435,6 +476,11 @@ async function saveCandidatesForSource(source, candidates) {
       summary = await summarize(summaryInput);
     } catch (err) {
       console.warn(`[scraper] summarize failed for ${candidate.url}:`, err.message);
+    }
+
+    if (!isValidNewsSummary(summary)) {
+      console.warn(`[scraper] skipped item with missing/invalid summary: ${candidate.url}`);
+      continue;
     }
 
     const category = guessCategory(candidate.title, enriched.text);

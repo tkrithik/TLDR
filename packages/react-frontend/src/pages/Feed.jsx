@@ -92,7 +92,7 @@ export default function Feed() {
         q: q || undefined,
         hasVideo: hasVideo || undefined,
       })
-      setArticles(data.items)
+      setArticles((data.items || []).filter((article) => article.summary && article.summary.trim().length >= 80))
       setTotal(data.total)
       setPages(data.pages)
     } catch (e) {
