@@ -28,6 +28,7 @@ export default function Sources() {
     try {
       const res = await apiFetch(`/api/sources?page=${page}&limit=${PAGE_SIZE}`)
       const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Server error ${res.status}`)
       setItems(data.items || [])
       setTotalPages(data.pages || 1)
     } catch (e) {
