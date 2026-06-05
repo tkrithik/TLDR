@@ -16,7 +16,7 @@ export async function summarize(text) {
     return text.slice(0, 280).trim() + (text.length > 280 ? "…" : "");
   }
 
-  const prompt = `Summarize the following news article in exactly 2-4 concise sentences. Use plain text only, no markdown, no bullet points, no headers. Be factual and direct.\n\n${text.slice(0, 8000)}`;
+  const prompt = `Summarize the following news article in exactly 2-4 concise sentences. Use plain text only, no markdown, no bullet points, no headers. Be factual and direct. Focus only on the central news event, key people/organizations, actions, consequences, and important context. Ignore boilerplate such as copyright notices, app download prompts, newsletters, navigation text, related links, ads, cookie notices, and source branding. If the input appears to contain boilerplate, do not mention it.\n\n${text.slice(0, 8000)}`;
 
   try {
     const res = await fetch(ANTHROPIC_API_URL, {

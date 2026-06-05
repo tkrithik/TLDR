@@ -47,10 +47,51 @@ function stripHtml(value) {
   return cleanText($.text());
 }
 
+const BOILERPLATE_PATTERNS = [
+  /^(advertisement|subscribe|sign up|log in|login|share|follow us|read more|related|cookie|privacy|terms|all rights reserved)$/i,
+  /©\s*\d{4}/i,
+  /all rights reserved/i,
+  /warner bros\. discovery company/i,
+  /cnn sans/i,
+  /scan the qr code/i,
+  /download the .* app/i,
+  /google play|apple store/i,
+  /unlock your personalized feed/i,
+  /email updates on topics you follow/i,
+  /^show all$/i,
+  /^view the latest news and videos/i,
+  /^everything you need to know about/i,
+  /cookies? (policy|settings|preferences)/i,
+  /accept (all )?cookies/i,
+  /privacy policy|terms of service/i,
+  /newsletter|sign up for/i,
+  /already have an account/i,
+  /enable javascript/i,
+];
+
 function isLowValueText(text) {
   const value = cleanText(text);
-  if (value.length < 35) return true;
-  return /^(advertisement|subscribe|sign up|log in|login|share|follow us|read more|related|cookie|privacy|terms|all rights reserved)$/i.test(value);
+  if (value.length < 45) return true;
+  if (BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value))) return true;
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length < 8) return true;
+  const linkOrUiWords = words.filter((word) => /^(click|tap|menu|subscribe|login|share|follow|download|app|cookies?|privacy|terms)$/i.test(word)).length;
+  return words.length > 0 && linkOrUiWords / words.length > 0.35;
+}
+
+function cleanArticleText(text) {
+  const seen = new Set();
+  const sentences = cleanText(text)
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((part) => cleanText(part))
+    .filter((part) => part && !isLowValueText(part))
+    .filter((part) => {
+      const key = part.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return cleanText(sentences.join(" "));
 }
 
 function findFirstUrl(text) {
@@ -271,24 +312,25 @@ function extractJsonLdArticleBody($) {
 
 function scoreArticleContainer($, el) {
   const clone = $(el).clone();
-  clone.find("script, style, noscript, nav, header, footer, aside, form, button, iframe, figure, figcaption, .ad, .ads, .advertisement, .promo, .newsletter, .related, .comments, [class*='ad-'], [class*='share'], [class*='social'], [class*='newsletter'], [class*='related'], [id*='comments']").remove();
-  const paragraphs = clone.find("p")
+  clone.find("script, style, noscript, nav, header, footer, aside, form, button, iframe, figure, figcaption, [aria-label*='share' i], [class*='ad' i], [id*='ad' i], [class*='promo' i], [class*='newsletter' i], [class*='related' i], [class*='comment' i], [class*='share' i], [class*='social' i], [class*='signup' i], [class*='paywall' i], [class*='breadcrumb' i], [data-testid*='ad' i], [data-testid*='share' i], [data-testid*='related' i]").remove();
+  const paragraphs = clone.find("p, [data-testid*='paragraph' i]")
     .map((_i, p) => cleanText($(p).text()))
     .get()
     .filter((text) => !isLowValueText(text));
-  const text = cleanText(paragraphs.join(" "));
+  const text = cleanArticleText(paragraphs.join(" "));
   const linkText = cleanText(clone.find("a").text()).length;
   const commaCount = (text.match(/,/g) || []).length;
-  const paragraphScore = paragraphs.filter((para) => para.length >= 80).length * 120;
-  const linkPenalty = text.length ? Math.min(400, Math.round((linkText / text.length) * 400)) : 400;
-  return { text, score: text.length + paragraphScore + commaCount * 10 - linkPenalty };
+  const paragraphScore = paragraphs.filter((para) => para.length >= 80).length * 140;
+  const linkPenalty = text.length ? Math.min(700, Math.round((linkText / text.length) * 700)) : 700;
+  const boilerplatePenalty = BOILERPLATE_PATTERNS.reduce((sum, pattern) => sum + (pattern.test(text) ? 500 : 0), 0);
+  return { text, score: text.length + paragraphScore + commaCount * 10 - linkPenalty - boilerplatePenalty };
 }
 
 function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "") {
   const $ = cheerio.load(html);
   const jsonLdBody = extractJsonLdArticleBody($);
 
-  $("script, style, noscript, nav, header, footer, aside, form, button, svg, canvas, .ad, .ads, .advertisement, .promo, .newsletter, .related, .comments, [class*='ad-'], [class*='share'], [class*='social'], [class*='newsletter'], [class*='related'], [id*='comments']").remove();
+  $("script, style, noscript, nav, header, footer, aside, form, button, svg, canvas, [aria-label*='share' i], [class*='ad' i], [id*='ad' i], [class*='promo' i], [class*='newsletter' i], [class*='related' i], [class*='comment' i], [class*='share' i], [class*='social' i], [class*='signup' i], [class*='paywall' i], [class*='breadcrumb' i], [data-testid*='ad' i], [data-testid*='share' i], [data-testid*='related' i]").remove();
   const selectors = [
     "article",
     "main article",
@@ -305,7 +347,8 @@ function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "") {
   ];
 
   const candidates = [];
-  if (jsonLdBody.length >= 300) candidates.push({ text: jsonLdBody, score: jsonLdBody.length + 1000 });
+  const cleanedJsonLdBody = cleanArticleText(jsonLdBody);
+  if (cleanedJsonLdBody.length >= 300) candidates.push({ text: cleanedJsonLdBody, score: cleanedJsonLdBody.length + 1000 });
 
   for (const selector of selectors) {
     $(selector).each((_idx, el) => {
@@ -322,8 +365,10 @@ function extractArticleBodyFromHtml(html, baseUrl, fallbackText = "") {
       $("meta[name='description']").attr("content") ||
       $("meta[name='twitter:description']").attr("content") ||
       "";
-    text = cleanText(metaDescription) || cleanText(fallbackText);
+    text = cleanArticleText(metaDescription) || cleanArticleText(fallbackText);
   }
+
+  text = cleanArticleText(text);
 
   const imageUrl = extractImageFromHtml($, baseUrl);
   const { videoUrl, videoEmbed } = extractVideoFromHtml($, baseUrl);
@@ -347,7 +392,7 @@ async function enrichCandidate(candidate) {
   }
 
   return {
-    text: stripHtml(candidate.body),
+    text: cleanArticleText(stripHtml(candidate.body)),
     imageUrl: candidate.imageUrl || "",
     videoUrl: candidate.videoUrl || "",
     videoEmbed: candidate.videoEmbed || youtubeEmbedUrl(candidate.url),

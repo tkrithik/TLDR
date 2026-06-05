@@ -92,21 +92,75 @@ function sourceUrl(article) {
   return article.sourceId?.url || article.url;
 }
 
+const SUMMARY_BOILERPLATE_PATTERNS = [
+  /©\s*\d{4}/i,
+  /all rights reserved/i,
+  /warner bros\. discovery company/i,
+  /cnn sans/i,
+  /scan the qr code/i,
+  /download the .* app/i,
+  /google play|apple store/i,
+  /unlock your personalized feed/i,
+  /email updates on topics you follow/i,
+  /^show all$/i,
+  /^view the latest news and videos/i,
+  /^everything you need to know about/i,
+  /cookies?|privacy policy|terms of service/i,
+  /subscribe|sign up|log in|newsletter/i,
+  /advertisement/i,
+];
+
+function cleanSummaryText(value) {
+  const seen = new Set();
+  const sentences = String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 30)
+    .filter((sentence) => !SUMMARY_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(sentence)))
+    .filter((sentence) => {
+      const key = sentence.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return sentences.join(" ").trim();
+}
+
+function trimSummary(value, maxLength = 420) {
+  const text = cleanSummaryText(value);
+  if (text.length <= maxLength) return text;
+  const clipped = text.slice(0, maxLength);
+  const cutAt = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf(" "));
+  return clipped.slice(0, cutAt > 120 ? cutAt : maxLength).trim() + "…";
+}
+
 function combinedSummary(articles) {
   const pieces = articles
-    .map((article) => ({ name: sourceName(article), text: String(article.summary || article.title || "").trim() }))
-    .filter((item) => item.text);
+    .map((article) => trimSummary(article.summary || article.title || "", 280))
+    .filter(Boolean);
 
-  if (pieces.length <= 1) return pieces[0]?.text || "";
+  if (pieces.length <= 1) return pieces[0] || "";
 
-  const uniqueNames = [...new Set(pieces.map((item) => item.name))];
-  const lead = `This is a combined story using coverage from ${uniqueNames.join(", ")}.`;
-  const body = pieces
-    .slice(0, 8)
-    .map((item) => `${item.name} reports: ${item.text}`)
-    .join(" ");
-  const conclusion = `Together, the sources give a fuller view of the same developing story instead of showing separate one-source summaries.`;
-  return `${lead} ${body} ${conclusion}`;
+  const uniqueSentences = [];
+  const seen = new Set();
+  for (const piece of pieces) {
+    for (const sentence of piece.split(/(?<=[.!?])\s+/)) {
+      const clean = cleanSummaryText(sentence);
+      if (!clean) continue;
+      const key = clean.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueSentences.push(clean);
+      break;
+    }
+    if (uniqueSentences.length >= 3) break;
+  }
+
+  const summary = uniqueSentences.join(" ");
+  return trimSummary(summary || pieces[0], 520);
 }
 
 function toStory(group) {
