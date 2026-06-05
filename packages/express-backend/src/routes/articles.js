@@ -55,7 +55,7 @@ function samePublishedDay(a, b) {
   const da = new Date(a.publishedAt || a.scrapedAt || a.createdAt);
   const db = new Date(b.publishedAt || b.scrapedAt || b.createdAt);
   if (Number.isNaN(da.valueOf()) || Number.isNaN(db.valueOf())) return true;
-  return Math.abs(da.getTime() - db.getTime()) <= (Number(process.env.STORY_GROUP_WINDOW_HOURS ?? 168) * 60 * 60 * 1000);
+  return Math.abs(da.getTime() - db.getTime()) <= (Number(process.env.STORY_GROUP_WINDOW_HOURS ?? 48) * 60 * 60 * 1000);
 }
 
 function areSameStory(article, group) {
@@ -66,11 +66,12 @@ function areSameStory(article, group) {
   const tokenSet = new Set(tokens);
   const shared = group.tokens.filter((token) => tokenSet.has(token));
 
-  // Be intentionally more aggressive than exact-title dedupe: different outlets often
-  // describe the same event with different headlines. Two shared meaningful words or
-  // a modest Jaccard score is enough to create a multi-source story cluster.
-  if (score >= 0.18) return true;
-  if (shared.length >= 2) return true;
+  // Keep grouping useful without collapsing the entire feed. The old thresholds
+  // (0.18 Jaccard or two shared tokens) merged unrelated political/world articles
+  // into a few giant stories, which made All show only a handful of cards. Require
+  // stronger overlap so only genuinely similar coverage becomes one synthesized story.
+  if (score >= 0.34) return true;
+  if (shared.length >= 4 && score >= 0.22) return true;
 
   return false;
 }
@@ -362,7 +363,7 @@ articlesRouter.get("/", optionalAuth, async (req, res) => {
 
     const rawItems = await Article.find(query)
       .sort({ publishedAt: -1, scrapedAt: -1, createdAt: -1 })
-      .limit(500)
+      .limit(Math.min(parsePositiveInt(req.query.rawLimit, 1500), 3000))
       .populate("sourceId", "name url")
       .lean();
 
